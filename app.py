@@ -89,9 +89,8 @@ CSS = """<style>
 .hero {background:#000; color:#fff; border-radius:12px; padding:26px 30px; margin-bottom:20px}
 .hero h1 {color:#fff; font-size:28px; margin:0; padding:0}
 .hero p {color:#c6cbc7; margin:6px 0 0}
-.hero .brand {color:#ffd700; font-weight:700; letter-spacing:.04em; font-size:13px; margin-bottom:8px}
 [data-testid="stMetric"] {background:#fff; border-radius:10px; padding:16px 18px;
-  box-shadow:0 1px 2px rgba(16,16,16,.05), 0 8px 24px rgba(16,16,16,.06)}
+  border:1px solid #e4e4e7}
 [data-testid="stMetricLabel"] * {color:#6b6b6b}
 [data-testid="stBaseButton-primary"], button[kind="primary"] {background:#ffd700; border:0; border-radius:6px; font-weight:700}
 [data-testid="stBaseButton-primary"] *, button[kind="primary"] * {color:#000}
@@ -105,8 +104,21 @@ h2, h3 {color:#000}
 
 
 def hero(sub, title='Import Affiliate TikTok'):
-    st.markdown(f'<div class="hero"><div class="brand">⚡ AUTOMASI</div><h1>{title}</h1>'
+    st.markdown(f'<div class="hero"><h1>{title}</h1>'
                 f'<p>{sub}</p></div>', unsafe_allow_html=True)
+
+
+def explain(e, doing):
+    """Pesan error Google Sheets yang menyebut penyebab dan langkah berikutnya."""
+    if isinstance(e, SystemExit):  # grid_rows/read_raw memakai sys.exit('ERROR: ...')
+        return str(e.code).removeprefix('ERROR: ')
+    status = getattr(e.resp, 'status', None)
+    if status == 403:
+        return (f'Gagal {doing}: tidak ada akses ke sheet. Bagikan sheet sebagai Editor ke '
+                f'{sa_info()["client_email"]}, lalu coba lagi.')
+    if status == 404:
+        return f'Gagal {doing}: sheet tidak ditemukan. Cek lagi link Google Sheet tujuan.'
+    return f'Gagal {doing}: {e}'
 
 
 def n(x):
@@ -173,8 +185,8 @@ def flow(sid, name, data, email):
     rows, skipped = ia.drop_skipped(rows, mapping)
     try:
         new_idx, first, last_row, out = plan(sid, name, len(data), filled, rows, mapping)
-    except HttpError as e:
-        st.error(f'Gagal membaca Google Sheets: {e}')
+    except (HttpError, SystemExit) as e:
+        st.error(explain(e, 'membaca Google Sheets'))
         return
 
     key = (sid, name, len(data))
@@ -221,7 +233,7 @@ def flow(sid, name, data, email):
         st.dataframe(pd.DataFrame(new_ids, columns=['Product ID', 'Product Name', 'Brand', 'Sub Brand']),
                      hide_index=True)
 
-    if st.button('▶   Jalankan Import', type='primary', disabled=not (out or new_ids)):
+    if st.button('Jalankan Import', type='primary', disabled=not (out or new_ids)):
         try:
             with st.spinner('Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
@@ -235,8 +247,8 @@ def flow(sid, name, data, email):
             plan.clear()
             brand_data.clear()
             st.rerun()
-        except HttpError as e:
-            st.error(f'Gagal menulis ke Google Sheets: {e}')
+        except (HttpError, SystemExit) as e:
+            st.error(explain(e, 'menulis ke Google Sheets'))
 
 
 def flow_tap(sid, name, data, email):
@@ -263,8 +275,8 @@ def flow_tap(sid, name, data, email):
     rows, skipped = ia.drop_skipped(rows, mapping)
     try:
         first, last_row, out, dates = plan_tap(sid, name, len(data), filled, rows, mapping)
-    except HttpError as e:
-        st.error(f'Gagal membaca Google Sheets: {e}')
+    except (HttpError, SystemExit) as e:
+        st.error(explain(e, 'membaca Google Sheets'))
         return
 
     key = ('tap', sid, name, len(data))
@@ -323,7 +335,7 @@ def flow_tap(sid, name, data, email):
         st.dataframe(pd.DataFrame(new_ids, columns=['Product ID', 'Product Name', 'Brand', 'Sub Brand']),
                      hide_index=True)
 
-    if st.button('▶   Jalankan Import', type='primary', disabled=not (out or new_ids), key='run_tap'):
+    if st.button('Jalankan Import', type='primary', disabled=not (out or new_ids), key='run_tap'):
         try:
             with st.spinner('Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
@@ -336,8 +348,8 @@ def flow_tap(sid, name, data, email):
             plan_tap.clear()
             brand_data.clear()
             st.rerun()
-        except HttpError as e:
-            st.error(f'Gagal menulis ke Google Sheets: {e}')
+        except (HttpError, SystemExit) as e:
+            st.error(explain(e, 'menulis ke Google Sheets'))
 
 
 def sheet_link(default_id, tab, key):
@@ -366,7 +378,7 @@ def main():
         st.button('Keluar', on_click=st.logout)
         st.stop()
 
-    st.sidebar.markdown('**⚡ Automasi**  '+chr(10)+'TikTok')
+    st.sidebar.markdown('**Automasi**  '+chr(10)+'TikTok')
     page = st.sidebar.radio('Menu', ['Raw Affiliate', 'TAP GMV'])
     st.sidebar.text(email)
     st.sidebar.button('Keluar', on_click=st.logout)
