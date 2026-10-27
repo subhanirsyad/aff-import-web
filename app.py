@@ -1,6 +1,6 @@
 """
 Import Affiliate TikTok -- versi web (Streamlit). Cuma akun @warnaemasindonesia.com yang bisa masuk.
-Dua menu: Raw Affiliate (import_aff.py) dan TAP GMV (import_tap.py). Kedua file itu ada satu folder di atas
+Dua menu: Raw Affiliate (import_aff.py) dan TAP GMV (import_tap.py); keduanya juga mengisi sheet gabungan (import_comb.py). Kedua file itu ada satu folder di atas
 saat lokal; salin ke folder ini saat deploy.
 
 Jalankan lokal:  streamlit run aff_web/app.py   (butuh .streamlit/secrets.toml, lihat secrets.toml.example)
@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent)]
 import import_aff as ia  # noqa: E402
+import import_comb as ic  # noqa: E402
 import import_tap as it  # noqa: E402
 
 DOMAIN = 'warnaemasindonesia.com'
@@ -78,6 +79,11 @@ def parse_tap(name, data):
 @st.cache_data(ttl=120, show_spinner='Membaca tab all...')
 def plan_tap(sid, name, size, filled, _rows, _mapping):
     return it.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid)
+
+
+@st.cache_data(ttl=120, show_spinner='Membaca sheet gabungan...')
+def plan_comb(csid, ckey, _base):
+    return ic.plan_rows(ia.get_service(False, sa_info()), _base, csid)
 
 
 # Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
@@ -146,6 +152,7 @@ def sidebar(email):
                 brand_data.clear()
                 plan.clear()
                 plan_tap.clear()
+                plan_comb.clear()
             st.markdown(f'<div class="user"><div class="avatar">{email[:1].upper()}</div>'
                         f'<div class="me">{email}</div></div>', unsafe_allow_html=True)
             st.button('Keluar', on_click=st.logout, width='stretch')
@@ -163,6 +170,53 @@ def explain(e, doing):
     if status == 404:
         return f'Gagal {doing}: sheet tidak ditemukan. Cek lagi link Google Sheet tujuan.'
     return f'Gagal {doing}: {e}'
+
+
+def comb_summary(csid, ckey, base, source):
+    """Info baris tujuan + peringatan tanggal yang sudah ada di sheet gabungan. Tidak ada sheet -> dilewati."""
+    if not csid:
+        return
+    try:
+        first, _, out, seen = plan_comb(csid, ckey, base)
+    except (HttpError, SystemExit) as e:
+        st.error(explain(e, 'membaca sheet gabungan'))
+        return
+    if out:
+        st.info(f'Sheet gabungan (tab **{ic.COMB_TAB}**): {n(len(out))} baris Source {source} akan ditambahkan di '
+                f'baris **{n(first)} - {n(first + len(out) - 1)}**.')
+    ov = ic.overlap(seen, source, base)
+    if ov:
+        st.warning(f'Sheet gabungan sudah berisi {n(sum(ov.values()))} baris Source {source} untuk {len(ov)} tanggal '
+                   f'yang juga ada di file ini ({min(ov)} s/d {max(ov)}). Kalau dilanjut, datanya dobel.')
+
+
+def comb_write(csid, base, email, name, key):
+    """Tulis ke sheet gabungan -> pesan hasil. Kegagalan disimpan supaya bisa dicoba lagi tanpa menulis ulang sheet utama."""
+    if not csid:
+        return ''
+    try:
+        with st.spinner('Menulis ke sheet gabungan...'):
+            svc = ia.get_service(True, sa_info())
+            first, _, out, _ = ic.plan_rows(svc, base, csid)  # hitung ulang tepat sebelum menulis
+            n_rows = ic.write_rows(svc, out, first, csid)
+    except (HttpError, SystemExit) as e:
+        st.session_state['comb_fail'] = (key, csid, base, explain(e, 'menulis ke sheet gabungan'))
+        return ''
+    st.session_state.pop('comb_fail', None)
+    plan_comb.clear()
+    print(f'[APPLY GABUNGAN] {email} | {name} | {n_rows} baris di {first}')
+    return f' Sheet gabungan: {n(n_rows)} baris ditulis mulai baris {first}.'
+
+
+def comb_retry(key, email, name):
+    fail = st.session_state.get('comb_fail')
+    if fail and fail[0] == key:
+        st.error(f'Import ke sheet tujuan sudah selesai, tapi {fail[3]}')
+        if st.button('Coba lagi update sheet gabungan', key='retry_comb'):
+            msg = comb_write(fail[1], fail[2], email, name, key)
+            if msg:
+                st.session_state['done'] = (key, msg.strip())
+            st.rerun()
 
 
 def n(x):
@@ -208,7 +262,7 @@ def fill_brands(key, names, count):
     return mapping, new_ids, filled
 
 
-def flow(sid, name, data, email):
+def flow(sid, csid, name, data, email):
     try:
         rows = parse(name, data)
     except ValueError as e:
@@ -236,6 +290,8 @@ def flow(sid, name, data, email):
     key = (sid, name, len(data))
     if st.session_state.get('done', (None, ''))[0] == key:
         st.success(st.session_state['done'][1])
+    comb_retry(key, email, name)
+    comb_base = ic.aff_rows(rows, mapping)
 
     last = first + len(out) - 1
     gmv = sum(float(ia.num(rows[i]['Payment Amount']) or 0) for i in new_idx)
@@ -248,6 +304,7 @@ def flow(sid, name, data, email):
         st.info(f'Akan ditambahkan ke tab **ALL** baris **{n(first)} - {n(last)}** ({n(len(out))} baris).')
     else:
         st.info('Tidak ada baris baru untuk ditambahkan ke tab ALL.')
+    comb_summary(csid, (key, filled), comb_base, 'SC')
     c = st.columns(4)
     c[0].metric('Baris baru', f'{n(len(out))}')
     c[1].metric('Product ID', f'{n(len(pids))}')
@@ -286,8 +343,9 @@ def flow(sid, name, data, email):
                 n_ids = ia.write_new_ids(svc, new_ids)
                 n_rows = ia.write_rows(svc, out, first, sid)
             print(f'[APPLY] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
+            extra = comb_write(csid, comb_base, email, name, key)
             st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
-                                              f'{n_ids} ID baru ke List Produk.')
+                                              f'{n_ids} ID baru ke List Produk.{extra}')
             plan.clear()
             brand_data.clear()
             st.rerun()
@@ -295,7 +353,7 @@ def flow(sid, name, data, email):
             st.error(explain(e, 'menulis ke Google Sheets'))
 
 
-def flow_tap(sid, name, data, email):
+def flow_tap(sid, csid, name, data, email):
     try:
         rows, scanned = parse_tap(name, data)
     except ValueError as e:
@@ -326,6 +384,8 @@ def flow_tap(sid, name, data, email):
     key = ('tap', sid, name, len(data))
     if st.session_state.get('done', (None, ''))[0] == key:
         st.success(st.session_state['done'][1])
+    comb_retry(key, email, name)
+    comb_base = ic.tap_rows(rows, mapping)
 
     last = first + len(out) - 1
     in_file = collections.Counter(r['Date'] for r in rows)
@@ -347,6 +407,7 @@ def flow_tap(sid, name, data, email):
         st.info(f'Akan ditambahkan ke tab **{it.TARGET_TAB}** baris **{n(first)} - {n(last)}** ({n(len(out))} baris).')
     else:
         st.info(f'Tidak ada baris untuk ditambahkan ke tab {it.TARGET_TAB}.')
+    comb_summary(csid, (key, filled), comb_base, 'TAP')
     c = st.columns(4)
     c[0].metric('Baris', n(len(out)))
     c[1].metric('Product ID', n(len({r['Product ID'] for r in rows})))
@@ -387,8 +448,9 @@ def flow_tap(sid, name, data, email):
                 n_ids = ia.write_new_ids(svc, new_ids)
                 n_rows = it.write_rows(svc, out, first, sid)
             print(f'[APPLY TAP] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
+            extra = comb_write(csid, comb_base, email, name, key)
             st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
-                                              f'{n_ids} ID baru ke List Produk.')
+                                              f'{n_ids} ID baru ke List Produk.{extra}')
             plan_tap.clear()
             brand_data.clear()
             st.rerun()
@@ -400,6 +462,19 @@ def sheet_link(default_id, tab, key):
     link = st.text_input(f'Link Google Sheet tujuan (data masuk ke tab {tab})', key=key,
                          value=f'https://docs.google.com/spreadsheets/d/{default_id}/edit',
                          help='Sheet harus sudah dibagikan (Editor) ke service account.')
+    try:
+        return ia.sheet_id_from(link)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+
+
+def comb_link(key):
+    link = st.text_input('Link sheet gabungan AFF - TAP (ikut diupdate; kosongkan untuk melewati)', key=key,
+                         value=f'https://docs.google.com/spreadsheets/d/{ic.COMB_ID}/edit',
+                         help=f'Data ditambahkan ke tab {ic.COMB_TAB}. Sheet harus dibagikan (Editor) ke service account.')
+    if not link.strip():
+        return None
     try:
         return ia.sheet_id_from(link)
     except ValueError as e:
@@ -427,15 +502,17 @@ def main():
         hero('Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu Jalankan Import. '
              'Hanya baris dengan GMV selain 0 yang dibawa.', 'Import TAP GMV')
         sid = sheet_link(it.TARGET_ID, it.TARGET_TAB, 'link_tap')
+        csid = comb_link('link_comb_tap')
         up = st.file_uploader('File TAP GMV (Excel)', type=['xlsx', 'xlsm'], key='up_tap')
         if up:
-            flow_tap(sid, up.name, up.getvalue(), email)
+            flow_tap(sid, csid, up.name, up.getvalue(), email)
         return
     hero('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
     sid = sheet_link(ia.TARGET_ID, ia.TARGET_TAB, 'link_aff')
+    csid = comb_link('link_comb_aff')
     up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'], key='up_aff')
     if up:
-        flow(sid, up.name, up.getvalue(), email)
+        flow(sid, csid, up.name, up.getvalue(), email)
 
 
 if __name__ == '__main__':
