@@ -45,7 +45,7 @@ def sa_info():
     return dict(st.secrets['gcp_service_account'])
 
 
-@st.cache_data(show_spinner='Membaca file...')
+@st.cache_data(max_entries=2, show_spinner='Membaca file...')
 def parse(name, data):
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / Path(name).name
@@ -62,13 +62,13 @@ def brand_data():
     return rows, ia.sheet_mapping(rows), {r['pid'] for r in rows}
 
 
-@st.cache_data(ttl=120, show_spinner='Membaca tab ALL...')
+@st.cache_data(max_entries=2, ttl=120, show_spinner='Membaca tab ALL...')
 def plan(sid, name, size, filled, _rows, _mapping):
     """sid/name/size/filled jadi kunci cache; _rows/_mapping tidak di-hash."""
     return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid=sid)
 
 
-@st.cache_data(show_spinner='Membaca file TAP (file besar, bisa 2-3 menit)...')
+@st.cache_data(max_entries=2, show_spinner='Membaca file TAP (file besar, bisa 2-3 menit)...')
 def parse_tap(name, data):
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / Path(name).name
@@ -76,12 +76,12 @@ def parse_tap(name, data):
         return it.read_raw(p)
 
 
-@st.cache_data(ttl=120, show_spinner='Membaca tab all...')
+@st.cache_data(max_entries=2, ttl=120, show_spinner='Membaca tab all...')
 def plan_tap(sid, name, size, filled, _rows, _mapping):
     return it.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid)
 
 
-@st.cache_data(ttl=120, show_spinner='Membaca sheet gabungan...')
+@st.cache_data(max_entries=2, ttl=120, show_spinner='Membaca sheet gabungan...')
 def plan_comb(csid, ckey, _base):
     return ic.plan_rows(ia.get_service(False, sa_info()), _base, csid)
 
