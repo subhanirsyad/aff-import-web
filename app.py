@@ -5,7 +5,9 @@ saat lokal; salin ke folder ini saat deploy.
 
 Jalankan lokal:  streamlit run aff_web/app.py   (butuh .streamlit/secrets.toml, lihat secrets.toml.example)
 """
+import base64
 import collections
+import functools
 import sys
 import tempfile
 from pathlib import Path
@@ -82,10 +84,30 @@ def plan_tap(sid, name, size, filled, _rows, _mapping):
 CSS = """<style>
 [data-testid="stHeader"] {background:transparent}
 .block-container {padding-top:2rem; max-width:1200px}
-[data-testid="stSidebar"] {background:#000}
+[data-testid="stSidebar"] {background:#000; border-right:1px solid rgba(255,255,255,.18)}
 [data-testid="stSidebar"] * {color:#fff}
 [data-testid="stSidebar"] button {background:none; border:1px solid rgba(255,255,255,.18); border-radius:6px}
 [data-testid="stSidebar"] button:hover {border-color:#fff}
+.side-logo {height:32px; display:block}
+.side-brand {margin:10px 0 24px; color:#c6cbc7; font-size:13px}
+[data-testid="stSidebarUserContent"] {display:flex; flex-direction:column; min-height:calc(100vh - 2rem)}
+[data-testid="stSidebarUserContent"] > div {flex:1; display:flex; flex-direction:column}
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {flex:1}
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has([data-testid="stRadio"]) {width:100% !important}
+[data-testid="stSidebar"] [data-testid="stRadio"] {width:100%}
+[data-testid="stSidebar"] [data-testid="stLayoutWrapper"]:has(> .st-key-side_foot) {margin-top:auto}
+[data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] {gap:2px; align-items:stretch}
+[data-testid="stSidebar"] [data-testid="stRadio"] label {width:100%; padding:10px 12px; border-radius:4px; font-weight:500; cursor:pointer}
+[data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {display:none}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {background:rgba(255,255,255,.12)}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {background:#fff}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {color:#000}
+.st-key-side_foot {gap:12px; padding-top:16px; border-top:1px solid rgba(255,255,255,.18)}
+.user {display:flex; gap:10px; align-items:center; min-width:0; margin:4px 0 12px}
+.avatar {width:32px; height:32px; border-radius:50%; background:#fff; display:grid; place-items:center; font-weight:700; flex:none}
+[data-testid="stSidebar"] .avatar {color:#000}
+.me {font-size:13px; color:#c6cbc7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.login-logo {height:44px; display:block; margin-bottom:18px}
 .hero {background:#000; color:#fff; border-radius:12px; padding:26px 30px; margin-bottom:20px}
 .hero h1 {color:#fff; font-size:28px; margin:0; padding:0}
 .hero p {color:#c6cbc7; margin:6px 0 0}
@@ -103,9 +125,31 @@ h2, h3 {color:#000}
 </style>"""
 
 
-def hero(sub, title='Import Affiliate TikTok'):
-    st.markdown(f'<div class="hero"><h1>{title}</h1>'
-                f'<p>{sub}</p></div>', unsafe_allow_html=True)
+@functools.cache
+def logo_uri():
+    return 'data:image/png;base64,' + base64.b64encode((HERE / 'logo-wei.png').read_bytes()).decode()
+
+
+def hero(sub, title='Import Affiliate TikTok', logo=False):
+    img = f'<img class="login-logo" src="{logo_uri()}" alt="WEI">' if logo else ''
+    st.markdown(f'<div class="hero">{img}<h1>{title}</h1><p>{sub}</p></div>', unsafe_allow_html=True)
+
+
+def sidebar(email):
+    """Sidebar gaya dashboard Cussons: logo, menu kotak, lalu akun di bawah. Mengembalikan menu yang dipilih."""
+    with st.sidebar:
+        st.markdown(f'<img class="side-logo" src="{logo_uri()}" alt="WEI"><div class="side-brand">Import TikTok</div>',
+                    unsafe_allow_html=True)
+        page = st.radio('Menu', ['Raw Affiliate', 'TAP GMV'], label_visibility='collapsed')
+        with st.container(key='side_foot'):
+            if st.button('Muat ulang data brand', width='stretch'):
+                brand_data.clear()
+                plan.clear()
+                plan_tap.clear()
+            st.markdown(f'<div class="user"><div class="avatar">{email[:1].upper()}</div>'
+                        f'<div class="me">{email}</div></div>', unsafe_allow_html=True)
+            st.button('Keluar', on_click=st.logout, width='stretch')
+    return page
 
 
 def explain(e, doing):
@@ -369,7 +413,7 @@ def main():
     if not st.user.is_logged_in:
         _, mid, _ = st.columns([1, 1.4, 1])
         with mid:
-            hero(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).')
+            hero(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).', logo=True)
             st.button('Login dengan Google', on_click=st.login, type='primary', width='stretch')
         st.stop()
     email = st.user.get('email')
@@ -378,14 +422,7 @@ def main():
         st.button('Keluar', on_click=st.logout)
         st.stop()
 
-    st.sidebar.markdown('**Automasi**  '+chr(10)+'TikTok')
-    page = st.sidebar.radio('Menu', ['Raw Affiliate', 'TAP GMV'])
-    st.sidebar.text(email)
-    st.sidebar.button('Keluar', on_click=st.logout)
-    if st.sidebar.button('Muat ulang data brand'):
-        brand_data.clear()
-        plan.clear()
-        plan_tap.clear()
+    page = sidebar(email)
     if page == 'TAP GMV':
         hero('Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu Jalankan Import. '
              'Hanya baris dengan GMV selain 0 yang dibawa.', 'Import TAP GMV')
