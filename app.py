@@ -53,7 +53,7 @@ def brand_data():
     return rows, ia.sheet_mapping(rows), {r['pid'] for r in rows}
 
 
-@st.cache_data(ttl=120, show_spinner='Membaca tab ALL untuk cek duplikat...')
+@st.cache_data(ttl=120, show_spinner='Membaca tab ALL...')
 def plan(name, size, filled, _rows, _mapping):
     """name/size/filled jadi kunci cache; _rows/_mapping tidak di-hash."""
     return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping)
@@ -112,7 +112,7 @@ def flow(name, data, email):
     total = len(rows)
     rows, skipped = ia.drop_skipped(rows, mapping)
     try:
-        new_idx, dup, first, last_row, out = plan(name, len(data), filled, rows, mapping)
+        new_idx, first, last_row, out = plan(name, len(data), filled, rows, mapping)
     except HttpError as e:
         st.error(f'Gagal membaca Google Sheets: {e}')
         return
@@ -137,17 +137,16 @@ def flow(name, data, email):
     c[1].metric('Product ID', f'{n(len(pids))}')
     c[2].metric('GMV (Payment Amount)', rp(gmv))
     c[3].metric('Est. Commission Base', rp(comm))
-    c = st.columns(3)
-    c[0].metric('Sudah ada (dilewati)', f'{n(dup)}')
-    c[1].metric(f'Dilewati ({", ".join(sorted(ia.SKIP_SUBS)).title()})', f'{n(len(skipped))}')
-    c[2].metric('ID baru ke List Produk', len(new_ids))
+    c = st.columns(2)
+    c[0].metric(f'Dilewati ({", ".join(sorted(ia.SKIP_SUBS)).title()})', f'{n(len(skipped))}')
+    c[1].metric('ID baru ke List Produk', len(new_ids))
 
     log = [f'{name}: {n(total)} baris, {len(names)} Product ID, tanpa filter.']
     if skipped:
         log.append(f'Dilewati (Sub Brand {sorted(ia.SKIP_SUBS)}): {n(len(skipped))} baris dari '
                    f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan ke ALL.')
     log += [f'Baris baru: {n(len(out))} -> baris {first}-{last} di ALL (baris terakhir sekarang {last_row})',
-            f'Dilewati (sudah ada): {n(dup)}', f'Per brand: {dict(by_brand)}',
+            f'Per brand: {dict(by_brand)}',
             f'ID baru untuk List Produk: {len(new_ids)}']
     log += [f'  {p} | {n[:60]} | {b} | {s}' for p, n, b, s in new_ids]
     st.code(chr(10).join(log), language=None)
@@ -167,7 +166,7 @@ def flow(name, data, email):
             with st.spinner('Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
                 # hitung ulang tepat sebelum menulis, supaya aman kalau ada yang menulis di antaranya
-                _, _, first, _, out = ia.plan_rows(svc, rows, mapping)
+                _, first, _, out = ia.plan_rows(svc, rows, mapping)
                 n_ids = ia.write_new_ids(svc, new_ids)
                 n_rows = ia.write_rows(svc, out, first)
             print(f'[APPLY] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')

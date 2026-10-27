@@ -16,9 +16,7 @@ ALUR
 
 Brand dicari dari brand_map.json (cache) -> kalau tidak ada, baca ulang "List Produk"
 -> kalau masih tidak ada, minta diisi manual. Hapus brand_map.json kalau mau paksa baca ulang.
-Dedup: baris yang sama persis (Time Created + Product ID + Creator + Content ID + Payment
-Amount + Content Type) dengan yang sudah ada di ALL dilewati; status tidak ikut kunci karena
-berubah-ubah.
+Tanpa cek duplikat: semua baris file ditambahkan ke bawah ALL. Jangan upload file yang sama dua kali.
 Kolom Category (D) dan kolom hitung (B, M, S-Z) ditulis sebagai rumus.
 Produk dengan Sub Brand di SKIP_SUBS (sekarang: Lip Care) tidak dimasukkan ke ALL; jumlahnya dicatat di log.
 """
@@ -102,14 +100,6 @@ def num(s):
     return int(f) if f.is_integer() else f
 
 
-def norm_num(s):
-    try:
-        v = num(s)
-    except ValueError:
-        return str(s).strip()
-    return str(v)
-
-
 def txt(s):
     """Apostrof di depan supaya Sheets simpan sebagai teks (ID 16+ digit, nama diawali = + - @)."""
     s = str(s)
@@ -121,11 +111,6 @@ def txt(s):
 def week_of(time_created):
     d = int(time_created[:2])
     return 'Week 1' if d <= 7 else 'Week 2' if d <= 14 else 'Week 3' if d <= 21 else 'Week 4' if d <= 28 else 'Week 5'
-
-
-def key_of(time_created, pid, creator, content_id, payment, content_type):
-    return '|'.join([str(time_created).strip(), str(pid).strip(), str(creator).strip(),
-                     str(content_id).strip(), norm_num(payment), str(content_type).strip()])
 
 
 def build_row(r, n, brand, sub):
@@ -147,20 +132,6 @@ def drop_skipped(rows, mapping):
     """Buang baris yang Sub Brand-nya ada di SKIP_SUBS -> (baris yang dipakai, baris yang dibuang)."""
     skip = lambda r: mapping[r['Product ID']][1].strip().lower() in SKIP_SUBS
     return [r for r in rows if not skip(r)], [r for r in rows if skip(r)]
-
-
-def split_new(keys, existing):
-    """Pisahkan indeks baris baru vs duplikat. Pakai hitungan, jadi baris kembar yang memang
-    ada di file tetap masuk dan run ulang file yang sama tidak menambah apa-apa."""
-    left = collections.Counter(existing)
-    new, dup = [], 0
-    for i, k in enumerate(keys):
-        if left[k] > 0:
-            left[k] -= 1
-            dup += 1
-        else:
-            new.append(i)
-    return new, dup
 
 
 # ---------------------------------------------------------------- Google Sheets
@@ -201,23 +172,16 @@ def read_brand_sheet(svc):
     return rows, len(vals) + 1  # baris terakhir yang terisi
 
 
-def read_existing(svc):
-    """(daftar kunci dedup, baris terakhir terisi di kolom A) dari tab ALL."""
+def last_filled_row(svc):
+    """Baris terakhir yang terisi di kolom A tab ALL."""
     _, total = grid_rows(svc, TARGET_ID, TARGET_TAB)
-    keys, last = [], 1
+    last = 1
     for start in range(2, total + 1, 50000):
         end = min(start + 49999, total)
-        resp = svc.values().batchGet(spreadsheetId=TARGET_ID, ranges=[
-            f"'{TARGET_TAB}'!{c}{start}:{c}{end}" for c in 'AEJOPQ']).execute()
-        cols = [[(x[0] if x else '') for x in vr.get('values', [])] for vr in resp['valueRanges']]
-        size = max(len(c) for c in cols)
-        if not size:
-            continue
-        if cols[0]:
-            last = max(last, start + len(cols[0]) - 1)
-        cols = [c + [''] * (size - len(c)) for c in cols]
-        keys += [key_of(a, e, o, q, j, p) for a, e, j, o, p, q in zip(*cols) if a]
-    return keys, last
+        vals = svc.values().get(spreadsheetId=TARGET_ID, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute().get('values', [])
+        if vals:
+            last = start + len(vals) - 1
+    return last
 
 
 # ---------------------------------------------------------------- brand
@@ -313,17 +277,13 @@ def resolve(svc, pids, names, count, mapping_file):
 
 # ---------------------------------------------------------------- rencana & tulis
 def plan_rows(svc, rows, mapping, limit=None):
-    """Baca ALL, buang duplikat -> (indeks baris baru, jumlah duplikat, baris pertama, baris terakhir
-    sekarang, nilai A..Z yang akan ditulis). Dihitung ulang saat Apply supaya posisi selalu terbaru."""
-    existing, last_row = read_existing(svc)
-    keys = [key_of(r['Time Created'], r['Product ID'], r['Creator Username'], r['Content ID'], r['Payment Amount'],
-                   CONTENT_TYPE[r['Content Type']]) for r in rows]
-    new_idx, dup = split_new(keys, existing)
-    if limit:
-        new_idx = new_idx[:limit]
+    """Semua baris ditambahkan ke bawah ALL -> (indeks baris, baris pertama, baris terakhir sekarang,
+    nilai A..Z yang akan ditulis). Dihitung ulang saat Apply supaya posisi selalu terbaru."""
+    last_row = last_filled_row(svc)
+    new_idx = list(range(len(rows)))[:limit]
     first = last_row + 1
     out = [build_row(rows[i], first + j, *mapping[rows[i]['Product ID']]) for j, i in enumerate(new_idx)]
-    return new_idx, dup, first, last_row, out
+    return new_idx, first, last_row, out
 
 
 def write_new_ids(svc, new_ids):
@@ -386,12 +346,11 @@ def main(argv=None):
     if skipped:
         print(f'Dilewati (Sub Brand {sorted(SKIP_SUBS)}): {len(skipped)} baris dari '
               f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan ke ALL.')
-    print('Baca tab ALL untuk cek duplikat...')
-    new_idx, dup, first, last_row, out = plan_rows(svc, rows, mapping, a.limit)
+    print('Baca tab ALL untuk cari baris terakhir...')
+    new_idx, first, last_row, out = plan_rows(svc, rows, mapping, a.limit)
 
     by_brand = collections.Counter(mapping[rows[i]['Product ID']][0] for i in new_idx)
     print(f'\nBaris baru: {len(new_idx)} -> baris {first}-{first + len(out) - 1} di ALL (baris terakhir sekarang {last_row})')
-    print(f'Dilewati (sudah ada): {dup}')
     print('Per brand:', dict(by_brand))
     print(f'ID baru untuk List Produk: {len(new_ids)}')
     for p, name, brand, sub in new_ids:
