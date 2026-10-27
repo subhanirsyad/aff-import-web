@@ -54,9 +54,9 @@ def brand_data():
 
 
 @st.cache_data(ttl=120, show_spinner='Membaca tab ALL...')
-def plan(name, size, filled, _rows, _mapping):
-    """name/size/filled jadi kunci cache; _rows/_mapping tidak di-hash."""
-    return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping)
+def plan(sid, name, size, filled, _rows, _mapping):
+    """sid/name/size/filled jadi kunci cache; _rows/_mapping tidak di-hash."""
+    return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid=sid)
 
 
 # Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
@@ -98,7 +98,7 @@ def rp(x):
     return 'Rp ' + f'{x:,.0f}'.replace(',', '.')
 
 
-def flow(name, data, email):
+def flow(sid, name, data, email):
     try:
         rows = parse(name, data)
     except ValueError as e:
@@ -143,12 +143,12 @@ def flow(name, data, email):
     total = len(rows)
     rows, skipped = ia.drop_skipped(rows, mapping)
     try:
-        new_idx, first, last_row, out = plan(name, len(data), filled, rows, mapping)
+        new_idx, first, last_row, out = plan(sid, name, len(data), filled, rows, mapping)
     except HttpError as e:
         st.error(f'Gagal membaca Google Sheets: {e}')
         return
 
-    key = (name, len(data))
+    key = (sid, name, len(data))
     if st.session_state.get('done', (None, ''))[0] == key:
         st.success(st.session_state['done'][1])
 
@@ -197,9 +197,9 @@ def flow(name, data, email):
             with st.spinner('Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
                 # hitung ulang tepat sebelum menulis, supaya aman kalau ada yang menulis di antaranya
-                _, first, _, out = ia.plan_rows(svc, rows, mapping)
+                _, first, _, out = ia.plan_rows(svc, rows, mapping, sid=sid)
                 n_ids = ia.write_new_ids(svc, new_ids)
-                n_rows = ia.write_rows(svc, out, first)
+                n_rows = ia.write_rows(svc, out, first, sid)
             print(f'[APPLY] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
             st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
                                               f'{n_ids} ID baru ke List Produk.')
@@ -232,9 +232,17 @@ def main():
         brand_data.clear()
         plan.clear()
     hero('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
+    link = st.text_input(f'Link Google Sheet tujuan (data masuk ke tab {ia.TARGET_TAB})',
+                         value=f'https://docs.google.com/spreadsheets/d/{ia.TARGET_ID}/edit',
+                         help='Sheet harus sudah dibagikan (Editor) ke service account.')
+    try:
+        sid = ia.sheet_id_from(link)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
     up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'])
     if up:
-        flow(up.name, up.getvalue(), email)
+        flow(sid, up.name, up.getvalue(), email)
 
 
 if __name__ == '__main__':

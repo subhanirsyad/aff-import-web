@@ -172,13 +172,21 @@ def read_brand_sheet(svc):
     return rows, len(vals) + 1  # baris terakhir yang terisi
 
 
-def last_filled_row(svc):
+def sheet_id_from(link):
+    """ID spreadsheet dari link Google Sheets (atau ID polos)."""
+    m = re.search(r'/d/([\w-]+)', link) or re.fullmatch(r'\s*([\w-]{25,})\s*', link)
+    if not m:
+        raise ValueError('Link Google Sheets tidak valid.')
+    return m.group(1)
+
+
+def last_filled_row(svc, sid=TARGET_ID):
     """Baris terakhir yang terisi di kolom A tab ALL."""
-    _, total = grid_rows(svc, TARGET_ID, TARGET_TAB)
+    _, total = grid_rows(svc, sid, TARGET_TAB)
     last = 1
     for start in range(2, total + 1, 50000):
         end = min(start + 49999, total)
-        vals = svc.values().get(spreadsheetId=TARGET_ID, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute().get('values', [])
+        vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute().get('values', [])
         if vals:
             last = start + len(vals) - 1
     return last
@@ -276,10 +284,10 @@ def resolve(svc, pids, names, count, mapping_file):
 
 
 # ---------------------------------------------------------------- rencana & tulis
-def plan_rows(svc, rows, mapping, limit=None):
+def plan_rows(svc, rows, mapping, limit=None, sid=TARGET_ID):
     """Semua baris ditambahkan ke bawah ALL -> (indeks baris, baris pertama, baris terakhir sekarang,
     nilai A..Z yang akan ditulis). Dihitung ulang saat Apply supaya posisi selalu terbaru."""
-    last_row = last_filled_row(svc)
+    last_row = last_filled_row(svc, sid)
     new_idx = list(range(len(rows)))[:limit]
     first = last_row + 1
     out = [build_row(rows[i], first + j, *mapping[rows[i]['Product ID']]) for j, i in enumerate(new_idx)]
@@ -304,14 +312,14 @@ def write_new_ids(svc, new_ids):
     return len(new_ids)
 
 
-def write_rows(svc, out, first):
+def write_rows(svc, out, first, sid=TARGET_ID):
     if not out:
         return 0
-    ensure_rows(svc, TARGET_ID, TARGET_TAB, first + len(out) - 1)
+    ensure_rows(svc, sid, TARGET_TAB, first + len(out) - 1)
     for s in range(0, len(out), 2000):
         chunk = out[s:s + 2000]
         svc.values().update(
-            spreadsheetId=TARGET_ID, range=f"'{TARGET_TAB}'!A{first + s}:Z{first + s + len(chunk) - 1}",
+            spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{first + s}:Z{first + s + len(chunk) - 1}",
             valueInputOption='USER_ENTERED', body={'values': chunk}).execute()
         print(f'Tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)
