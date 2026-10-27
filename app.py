@@ -1,6 +1,7 @@
 """
 Import Affiliate TikTok -- versi web (Streamlit). Cuma akun @warnaemasindonesia.com yang bisa masuk.
-Logika import ada di import_aff.py (satu folder di atas saat lokal; salin ke folder ini saat deploy).
+Dua menu: Raw Affiliate (import_aff.py) dan TAP GMV (import_tap.py). Kedua file itu ada satu folder di atas
+saat lokal; salin ke folder ini saat deploy.
 
 Jalankan lokal:  streamlit run aff_web/app.py   (butuh .streamlit/secrets.toml, lihat secrets.toml.example)
 """
@@ -16,11 +17,16 @@ from googleapiclient.errors import HttpError
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent)]
 import import_aff as ia  # noqa: E402
+import import_tap as it  # noqa: E402
 
 DOMAIN = 'warnaemasindonesia.com'
 HEAD = ['Date Created', 'Date', 'Week', 'Category', 'Product ID', 'Product Name', 'Brand', 'Sub Brand', 'Price',
         'Payment Amount', 'Est Commission Base', 'Quantity', 'Price*Qty', 'Order Status', 'Creator Username',
         'Content Type', 'Content ID', 'Standard commission rate']
+HEAD_TAP = ['Date', 'Campaign name', 'Creator name', 'Followers', 'Product ID', 'Product name', 'Brand', 'Sub Brand',
+            'All GMV', 'SV GMV', 'LS GMV', 'SL GMV', 'Revenue (Showcase)', 'Link GMV', 'Orders', 'LIVE orders',
+            'Video orders', 'LIVE likes', 'Video likes', 'Video views', 'LIVE views', 'LIVE streams', 'Videos',
+            'Items sold', 'Avg Item Sold', 'Item Sold Video', 'Item Sold LS', 'Link items sold']
 
 
 def allowed(email, verified, extra=()):
@@ -59,6 +65,19 @@ def plan(sid, name, size, filled, _rows, _mapping):
     return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid=sid)
 
 
+@st.cache_data(show_spinner='Membaca file TAP (file besar, bisa 2-3 menit)...')
+def parse_tap(name, data):
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / Path(name).name
+        p.write_bytes(data)
+        return it.read_raw(p)
+
+
+@st.cache_data(ttl=120, show_spinner='Membaca tab all...')
+def plan_tap(sid, name, size, filled, _rows, _mapping):
+    return it.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping, sid)
+
+
 # Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
 CSS = """<style>
 [data-testid="stHeader"] {background:transparent}
@@ -85,8 +104,8 @@ h2, h3 {color:#000}
 </style>"""
 
 
-def hero(sub):
-    st.markdown(f'<div class="hero"><div class="brand">⚡ AUTOMASI</div><h1>Import Affiliate TikTok</h1>'
+def hero(sub, title='Import Affiliate TikTok'):
+    st.markdown(f'<div class="hero"><div class="brand">⚡ AUTOMASI</div><h1>{title}</h1>'
                 f'<p>{sub}</p></div>', unsafe_allow_html=True)
 
 
@@ -96,6 +115,41 @@ def n(x):
 
 def rp(x):
     return 'Rp ' + f'{x:,.0f}'.replace(',', '.')
+
+
+def fill_brands(key, names, count):
+    """Tabel isian untuk Product ID yang belum punya brand -> (mapping, ID baru, isian), atau None kalau belum lengkap."""
+    sheet_rows, mapping, sheet_pids = brand_data()
+    mapping = dict(mapping)
+    unknown = [p for p in names if p not in mapping]
+    new_ids, filled = [], ()
+    if unknown:
+        brands = sorted({r['brand'] for r in sheet_rows if r['brand'] and r['brand'] != ia.UNKNOWN})
+        st.warning(f'{len(unknown)} Product ID belum punya brand. Isi Brand dan Sub Brand di tabel ini '
+                   '(Product Name boleh dibetulkan).')
+        df = pd.DataFrame({'Product ID': unknown, 'Product Name': [names[p] for p in unknown],
+                           'Brand': None, 'Sub Brand': None, 'Jumlah Baris': [count[p] for p in unknown]})
+        edited = st.data_editor(
+            df, hide_index=True, width='stretch', key=f'fill_{key}',
+            disabled=['Product ID', 'Jumlah Baris'],
+            column_config={'Brand': st.column_config.SelectboxColumn(options=brands),
+                           'Sub Brand': st.column_config.TextColumn(help='Contoh: Gluta Hya, Hair Shampoo')})
+        blank = edited['Brand'].fillna('').str.strip().eq('') | edited['Sub Brand'].fillna('').str.strip().eq('')
+        if blank.any():
+            st.info(f'Masih {int(blank.sum())} baris yang belum lengkap.')
+            return None
+        for _, r in edited.iterrows():
+            p, b, s = r['Product ID'], r['Brand'].strip(), r['Sub Brand'].strip()
+            mapping[p] = [b, s]
+            if p not in sheet_pids:
+                new_ids.append((p, (r['Product Name'] or names[p]).strip(), b, s))
+        filled = tuple((p, *mapping[p]) for p in unknown)
+        stale = [p for p in unknown if p in sheet_pids]
+        if stale:
+            st.caption(f'{len(stale)} ID ada di List Produk sebagai "{ia.UNKNOWN}" -- dipakai untuk import ini, '
+                       'barisnya di List Produk tidak diubah (ubah manual).')
+
+    return mapping, new_ids, filled
 
 
 def flow(sid, name, data, email):
@@ -110,35 +164,10 @@ def flow(sid, name, data, email):
         count[r['Product ID']] += 1
     st.success(f'{n(len(rows))} baris terbaca, {len(names)} Product ID. Semua baris dibawa (tanpa filter).')
 
-    sheet_rows, mapping, sheet_pids = brand_data()
-    mapping = dict(mapping)
-    unknown = [p for p in names if p not in mapping]
-    new_ids, filled = [], ()
-    if unknown:
-        brands = sorted({r['brand'] for r in sheet_rows if r['brand'] and r['brand'] != ia.UNKNOWN})
-        st.warning(f'{len(unknown)} Product ID belum punya brand. Isi Brand dan Sub Brand di tabel ini '
-                   '(Product Name boleh dibetulkan).')
-        df = pd.DataFrame({'Product ID': unknown, 'Product Name': [names[p] for p in unknown],
-                           'Brand': None, 'Sub Brand': None, 'Jumlah Baris': [count[p] for p in unknown]})
-        edited = st.data_editor(
-            df, hide_index=True, use_container_width=True, key=f'fill_{name}_{len(data)}',
-            disabled=['Product ID', 'Jumlah Baris'],
-            column_config={'Brand': st.column_config.SelectboxColumn(options=brands),
-                           'Sub Brand': st.column_config.TextColumn(help='Contoh: Gluta Hya, Hair Shampoo')})
-        blank = edited['Brand'].fillna('').str.strip().eq('') | edited['Sub Brand'].fillna('').str.strip().eq('')
-        if blank.any():
-            st.info(f'Masih {int(blank.sum())} baris yang belum lengkap.')
-            return
-        for _, r in edited.iterrows():
-            p, b, s = r['Product ID'], r['Brand'].strip(), r['Sub Brand'].strip()
-            mapping[p] = [b, s]
-            if p not in sheet_pids:
-                new_ids.append((p, (r['Product Name'] or names[p]).strip(), b, s))
-        filled = tuple((p, *mapping[p]) for p in unknown)
-        stale = [p for p in unknown if p in sheet_pids]
-        if stale:
-            st.caption(f'{len(stale)} ID ada di List Produk sebagai "{ia.UNKNOWN}" -- dipakai untuk import ini, '
-                       'barisnya di List Produk tidak diubah (ubah manual).')
+    res = fill_brands(f'{name}_{len(data)}', names, count)
+    if res is None:
+        return
+    mapping, new_ids, filled = res
 
     total = len(rows)
     rows, skipped = ia.drop_skipped(rows, mapping)
@@ -210,6 +239,118 @@ def flow(sid, name, data, email):
             st.error(f'Gagal menulis ke Google Sheets: {e}')
 
 
+def flow_tap(sid, name, data, email):
+    try:
+        rows, scanned = parse_tap(name, data)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    if not rows:
+        st.error('Tidak ada baris dengan GMV selain 0 di file ini.')
+        return
+    names, count = {}, collections.Counter()
+    for r in rows:
+        names.setdefault(r['Product ID'], r['Product name'])
+        count[r['Product ID']] += 1
+    st.success(f'{n(scanned)} baris dipindai, {n(len(rows))} baris dengan GMV selain 0, {len(names)} Product ID.')
+
+    res = fill_brands(f'tap_{name}_{len(data)}', names, count)
+    if res is None:
+        return
+    mapping, new_ids, filled = res
+
+    total = len(rows)
+    rows, skipped = ia.drop_skipped(rows, mapping)
+    try:
+        first, last_row, out, dates = plan_tap(sid, name, len(data), filled, rows, mapping)
+    except HttpError as e:
+        st.error(f'Gagal membaca Google Sheets: {e}')
+        return
+
+    key = ('tap', sid, name, len(data))
+    if st.session_state.get('done', (None, ''))[0] == key:
+        st.success(st.session_state['done'][1])
+
+    last = first + len(out) - 1
+    in_file = collections.Counter(r['Date'] for r in rows)
+    overlap = {d: dates[d] for d in in_file if dates.get(d)}
+    if overlap:
+        st.warning(f'Tab **{it.TARGET_TAB}** sudah berisi {n(sum(overlap.values()))} baris untuk '
+                   f'{len(overlap)} tanggal yang juga ada di file ini ({min(overlap)} s/d {max(overlap)}). '
+                   'Tidak ada cek duplikat, jadi kalau dilanjut datanya dobel.')
+    gmv = {k: sum(float(ia.num(r[c]) or 0) for r in rows) for k, c in
+           (('All', it.GMV), ('SV', 'Affiliate video-attributed GMV'), ('LS', 'Creator LIVE-attributed GMV'))}
+    by_brand = collections.defaultdict(lambda: [0, 0.0])
+    for r in rows:
+        b = by_brand[mapping[r['Product ID']][0]]
+        b[0] += 1
+        b[1] += float(ia.num(r[it.GMV]) or 0)
+
+    st.subheader('Ringkasan')
+    if out:
+        st.info(f'Akan ditambahkan ke tab **{it.TARGET_TAB}** baris **{n(first)} - {n(last)}** ({n(len(out))} baris).')
+    else:
+        st.info(f'Tidak ada baris untuk ditambahkan ke tab {it.TARGET_TAB}.')
+    c = st.columns(4)
+    c[0].metric('Baris', n(len(out)))
+    c[1].metric('Product ID', n(len({r['Product ID'] for r in rows})))
+    c[2].metric('Tanggal', f'{min(in_file)} s/d {max(in_file)}' if in_file else '-')
+    c[3].metric('All GMV', rp(gmv['All']))
+    c = st.columns(4)
+    c[0].metric('SV GMV', rp(gmv['SV']))
+    c[1].metric('LS GMV', rp(gmv['LS']))
+    c[2].metric(f'Dilewati ({", ".join(sorted(ia.SKIP_SUBS)).title()})', n(len(skipped)))
+    c[3].metric('ID baru ke List Produk', len(new_ids))
+
+    log = [f'{name}: {n(scanned)} baris dipindai, {n(total)} baris GMV selain 0, {len(names)} Product ID.']
+    if skipped:
+        log.append(f'Dilewati (Sub Brand {sorted(ia.SKIP_SUBS)}): {n(len(skipped))} baris dari '
+                   f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan.')
+    log += [f'Baris: {n(len(out))} -> baris {first}-{last} di {it.TARGET_TAB} (baris terakhir sekarang {last_row})',
+            f'Tanggal di file: {", ".join(f"{d} ({n(c)})" for d, c in sorted(in_file.items()))}',
+            f'ID baru untuk List Produk: {len(new_ids)}']
+    log += [f'  {p} | {nm[:60]} | {b} | {sb}' for p, nm, b, sb in new_ids]
+    st.code(chr(10).join(log), language=None)
+
+    if by_brand:
+        st.dataframe(pd.DataFrame([(k, v[0], rp(v[1])) for k, v in sorted(by_brand.items())],
+                                  columns=['Brand', 'Baris', 'All GMV']), hide_index=True)
+    if out:
+        with st.expander('Contoh 15 baris pertama (kolom B-AC)'):
+            st.dataframe(pd.DataFrame([[str(v).lstrip("'") for v in r] for r in out[:15]], columns=HEAD_TAP),
+                         hide_index=True)
+    if new_ids:
+        st.dataframe(pd.DataFrame(new_ids, columns=['Product ID', 'Product Name', 'Brand', 'Sub Brand']),
+                     hide_index=True)
+
+    if st.button('▶   Jalankan Import', type='primary', disabled=not (out or new_ids), key='run_tap'):
+        try:
+            with st.spinner('Menulis ke Google Sheets...'):
+                svc = ia.get_service(True, sa_info())
+                first, _, out, _ = it.plan_rows(svc, rows, mapping, sid)  # hitung ulang tepat sebelum menulis
+                n_ids = ia.write_new_ids(svc, new_ids)
+                n_rows = it.write_rows(svc, out, first, sid)
+            print(f'[APPLY TAP] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
+            st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
+                                              f'{n_ids} ID baru ke List Produk.')
+            plan_tap.clear()
+            brand_data.clear()
+            st.rerun()
+        except HttpError as e:
+            st.error(f'Gagal menulis ke Google Sheets: {e}')
+
+
+def sheet_link(default_id, tab, key):
+    link = st.text_input(f'Link Google Sheet tujuan (data masuk ke tab {tab})', key=key,
+                         value=f'https://docs.google.com/spreadsheets/d/{default_id}/edit',
+                         help='Sheet harus sudah dibagikan (Editor) ke service account.')
+    try:
+        return ia.sheet_id_from(link)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+
+
 def main():
     st.set_page_config(page_title='Import Affiliate TikTok', layout='wide')
     st.markdown(CSS, unsafe_allow_html=True)
@@ -217,7 +358,7 @@ def main():
         _, mid, _ = st.columns([1, 1.4, 1])
         with mid:
             hero(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).')
-            st.button('Login dengan Google', on_click=st.login, type='primary', use_container_width=True)
+            st.button('Login dengan Google', on_click=st.login, type='primary', width='stretch')
         st.stop()
     email = st.user.get('email')
     if not allowed(email, st.user.get('email_verified'), st.secrets.get('allowed_emails', [])):
@@ -225,22 +366,25 @@ def main():
         st.button('Keluar', on_click=st.logout)
         st.stop()
 
-    st.sidebar.markdown('**⚡ Automasi**  '+chr(10)+'Affiliate TikTok')
+    st.sidebar.markdown('**⚡ Automasi**  '+chr(10)+'TikTok')
+    page = st.sidebar.radio('Menu', ['Raw Affiliate', 'TAP GMV'])
     st.sidebar.text(email)
     st.sidebar.button('Keluar', on_click=st.logout)
     if st.sidebar.button('Muat ulang data brand'):
         brand_data.clear()
         plan.clear()
+        plan_tap.clear()
+    if page == 'TAP GMV':
+        hero('Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu Jalankan Import. '
+             'Hanya baris dengan GMV selain 0 yang dibawa.', 'Import TAP GMV')
+        sid = sheet_link(it.TARGET_ID, it.TARGET_TAB, 'link_tap')
+        up = st.file_uploader('File TAP GMV (Excel)', type=['xlsx', 'xlsm'], key='up_tap')
+        if up:
+            flow_tap(sid, up.name, up.getvalue(), email)
+        return
     hero('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
-    link = st.text_input(f'Link Google Sheet tujuan (data masuk ke tab {ia.TARGET_TAB})',
-                         value=f'https://docs.google.com/spreadsheets/d/{ia.TARGET_ID}/edit',
-                         help='Sheet harus sudah dibagikan (Editor) ke service account.')
-    try:
-        sid = ia.sheet_id_from(link)
-    except ValueError as e:
-        st.error(str(e))
-        st.stop()
-    up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'])
+    sid = sheet_link(ia.TARGET_ID, ia.TARGET_TAB, 'link_aff')
+    up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'], key='up_aff')
     if up:
         flow(sid, up.name, up.getvalue(), email)
 
