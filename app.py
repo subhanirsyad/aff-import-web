@@ -61,7 +61,6 @@ def plan(name, size, filled, _rows, _mapping):
 
 # Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
 CSS = """<style>
-.stApp, .stApp * {font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
 [data-testid="stHeader"] {background:transparent}
 .block-container {padding-top:2rem; max-width:1200px}
 [data-testid="stSidebar"] {background:#000}
@@ -227,7 +226,7 @@ def main():
         st.stop()
 
     st.sidebar.markdown('**⚡ Automasi**  '+chr(10)+'Affiliate TikTok')
-    st.sidebar.write(email)
+    st.sidebar.text(email)
     st.sidebar.button('Keluar', on_click=st.logout)
     if st.sidebar.button('Muat ulang data brand'):
         brand_data.clear()
