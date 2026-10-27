@@ -105,6 +105,9 @@ CSS = """<style>
 [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] {gap:2px; align-items:stretch}
 [data-testid="stSidebar"] [data-testid="stRadio"] label {width:100%; padding:10px 12px; border-radius:4px; font-weight:500; cursor:pointer}
 [data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {display:none}
+[data-testid="stSidebar"] [data-testid="stRadioGroup"] {gap:2px; align-items:stretch}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] {width:100%; box-sizing:border-box}
+[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child:not([data-testid="stMarkdownContainer"]) {display:none}
 [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {background:rgba(255,255,255,.12)}
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {background:#fff}
 [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {color:#000}
@@ -146,7 +149,7 @@ def sidebar(email):
     with st.sidebar:
         st.markdown(f'<img class="side-logo" src="{logo_uri()}" alt="WEI"><div class="side-brand">Import TikTok</div>',
                     unsafe_allow_html=True)
-        page = st.radio('Menu', ['Raw Affiliate', 'TAP GMV'], label_visibility='collapsed')
+        page = st.radio('Menu', ['AFF', 'TAP'], label_visibility='collapsed')
         with st.container(key='side_foot'):
             if st.button('Muat ulang data brand', width='stretch'):
                 brand_data.clear()
@@ -498,7 +501,7 @@ def main():
         st.stop()
 
     page = sidebar(email)
-    if page == 'TAP GMV':
+    if page == 'TAP':
         hero('Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu Jalankan Import. '
              'Hanya baris dengan GMV selain 0 yang dibawa.', 'Import TAP GMV')
         sid = sheet_link(it.TARGET_ID, it.TARGET_TAB, 'link_tap')
