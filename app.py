@@ -59,6 +59,38 @@ def plan(name, size, filled, _rows, _mapping):
     return ia.plan_rows(ia.get_service(False, sa_info()), _rows, _mapping)
 
 
+# Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
+CSS = """<style>
+.stApp, .stApp * {font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
+[data-testid="stHeader"] {background:transparent}
+.block-container {padding-top:2rem; max-width:1200px}
+[data-testid="stSidebar"] {background:#000}
+[data-testid="stSidebar"] * {color:#fff}
+[data-testid="stSidebar"] button {background:none; border:1px solid rgba(255,255,255,.18); border-radius:6px}
+[data-testid="stSidebar"] button:hover {border-color:#fff}
+.hero {background:#000; color:#fff; border-radius:12px; padding:26px 30px; margin-bottom:20px}
+.hero h1 {color:#fff; font-size:28px; margin:0; padding:0}
+.hero p {color:#c6cbc7; margin:6px 0 0}
+.hero .brand {color:#ffd700; font-weight:700; letter-spacing:.04em; font-size:13px; margin-bottom:8px}
+[data-testid="stMetric"] {background:#fff; border-radius:10px; padding:16px 18px;
+  box-shadow:0 1px 2px rgba(16,16,16,.05), 0 8px 24px rgba(16,16,16,.06)}
+[data-testid="stMetricLabel"] * {color:#6b6b6b}
+[data-testid="stBaseButton-primary"], button[kind="primary"] {background:#ffd700; border:0; border-radius:6px; font-weight:700}
+[data-testid="stBaseButton-primary"] *, button[kind="primary"] * {color:#000}
+[data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover {filter:brightness(.95)}
+[data-testid="stAlert"] {background:#fff; border:1px solid #000; border-radius:8px}
+[data-testid="stAlert"] * {color:#000}
+[data-testid="stFileUploader"] section {background:#fff; border:1px dashed #000; border-radius:8px}
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {border:1px solid #e4e4e7; border-radius:8px}
+h2, h3 {color:#000}
+</style>"""
+
+
+def hero(sub):
+    st.markdown(f'<div class="hero"><div class="brand">⚡ AUTOMASI</div><h1>Import Affiliate TikTok</h1>'
+                f'<p>{sub}</p></div>', unsafe_allow_html=True)
+
+
 def n(x):
     return f'{x:,}'.replace(',', '.')
 
@@ -181,10 +213,12 @@ def flow(name, data, email):
 
 def main():
     st.set_page_config(page_title='Import Affiliate TikTok', layout='wide')
-    st.title('Import Affiliate TikTok')
+    st.markdown(CSS, unsafe_allow_html=True)
     if not st.user.is_logged_in:
-        st.write(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).')
-        st.button('Login dengan Google', on_click=st.login, type='primary')
+        _, mid, _ = st.columns([1, 1.4, 1])
+        with mid:
+            hero(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).')
+            st.button('Login dengan Google', on_click=st.login, type='primary', use_container_width=True)
         st.stop()
     email = st.user.get('email')
     if not allowed(email, st.user.get('email_verified'), st.secrets.get('allowed_emails', [])):
@@ -192,12 +226,13 @@ def main():
         st.button('Keluar', on_click=st.logout)
         st.stop()
 
+    st.sidebar.markdown('**⚡ Automasi**  '+chr(10)+'Affiliate TikTok')
     st.sidebar.write(email)
     st.sidebar.button('Keluar', on_click=st.logout)
     if st.sidebar.button('Muat ulang data brand'):
         brand_data.clear()
         plan.clear()
-    st.caption('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
+    hero('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
     up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'])
     if up:
         flow(up.name, up.getvalue(), email)
