@@ -14,10 +14,12 @@ Tanpa cek duplikat; app memberi peringatan kalau tanggal & source yang sama suda
 """
 import collections
 import datetime
+import itertools
 
 import import_aff as ia
 
 COMB_ID, COMB_TAB = '1tUb-7HE6opq99115OaoHdKVy-drM-NAhsqIRH8DCaoc', '1-31 (all)'
+CHUNK = 40000
 KREATOR = "'LIST KREATOR'"
 
 
@@ -71,21 +73,29 @@ def with_formulas(vals, n):
 
 
 def read_state(svc, sid=COMB_ID):
-    """(baris terakhir terisi di kolom A, Counter (source, tanggal ISO) -> jumlah baris)."""
-    resp = svc.values().batchGet(spreadsheetId=sid, ranges=[f"'{COMB_TAB}'!A2:A", f"'{COMB_TAB}'!K2:K"],
-                                 valueRenderOption='UNFORMATTED_VALUE').execute()['valueRanges']
-    dates, sources = ([(x[0] if x else '') for x in vr.get('values', [])] for vr in resp)
+    """(baris terakhir terisi di kolom A, Counter (source, tanggal ISO) -> jumlah baris).
+    Dibaca per 40 ribu baris: httplib2 menolak respons yang terbuka lebih dari 10 MB dengan rasio kompresi > 100,
+    dan kolom A/K sheet ini sangat repetitif."""
+    _, total = ia.grid_rows(svc, sid, COMB_TAB)
     base = datetime.date(1899, 12, 30)
-    seen = collections.Counter()
-    for d, src in zip(dates, sources):
-        if isinstance(d, (int, float)):
-            iso = (base + datetime.timedelta(days=int(d))).isoformat()
-        elif isinstance(d, str) and len(d) == 10 and d[2] == '/':
-            iso = f'{d[6:]}-{d[3:5]}-{d[:2]}'
-        else:
-            continue
-        seen[(str(src).upper(), iso)] += 1
-    return 1 + len(dates), seen
+    seen, last = collections.Counter(), 1
+    for start in range(2, total + 1, CHUNK):
+        end = min(start + CHUNK - 1, total)
+        resp = svc.values().batchGet(spreadsheetId=sid, ranges=[f"'{COMB_TAB}'!A{start}:A{end}",
+                                                                f"'{COMB_TAB}'!K{start}:K{end}"],
+                                     valueRenderOption='UNFORMATTED_VALUE').execute()['valueRanges']
+        dates, sources = ([(x[0] if x else '') for x in vr.get('values', [])] for vr in resp)
+        if dates:
+            last = start + len(dates) - 1
+        for d, src in itertools.zip_longest(dates, sources, fillvalue=''):
+            if isinstance(d, (int, float)):
+                iso = (base + datetime.timedelta(days=int(d))).isoformat()
+            elif isinstance(d, str) and len(d) == 10 and d[2] == '/':
+                iso = f'{d[6:]}-{d[3:5]}-{d[:2]}'
+            else:
+                continue
+            seen[(str(src).upper(), iso)] += 1
+    return last, seen
 
 
 def overlap(seen, source, rows):
