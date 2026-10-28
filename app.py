@@ -207,12 +207,13 @@ def comb_write(csid, base, email, name, key):
     return f' Sheet gabungan: {n(n_rows)} baris ditulis mulai baris {first}.'
 
 
-def comb_retry(key, email, name):
+def comb_retry(key, email, name, csid=None):
+    """csid = link sheet gabungan yang SEKARANG ada di kolom isian (kalau link salah diganti, retry pakai yang baru)."""
     fail = st.session_state.get('comb_fail')
     if fail and fail[0] == key:
         st.error(f'Import ke sheet tujuan sudah selesai, tapi {fail[3]}')
         if st.button('Coba lagi update sheet gabungan', key='retry_comb'):
-            msg = comb_write(fail[1], fail[2], email, name, key)
+            msg = comb_write(csid or fail[1], fail[2], email, name, key)
             if msg:
                 st.session_state['done'] = (key, msg.strip())
             st.rerun()
@@ -289,7 +290,7 @@ def flow(sid, csid, name, data, email):
     key = (sid, name, len(data))
     if st.session_state.get('done', (None, ''))[0] == key:
         st.success(st.session_state['done'][1])
-    comb_retry(key, email, name)
+    comb_retry(key, email, name, csid)
     comb_base = ic.aff_rows(rows, mapping)
 
     last = first + len(out) - 1
@@ -383,7 +384,7 @@ def flow_tap(sid, csid, name, data, email):
     key = ('tap', sid, name, len(data))
     if st.session_state.get('done', (None, ''))[0] == key:
         st.success(st.session_state['done'][1])
-    comb_retry(key, email, name)
+    comb_retry(key, email, name, csid)
     comb_base = ic.tap_rows(rows, mapping)
 
     last = first + len(out) - 1
