@@ -8,16 +8,26 @@ Produk dengan Sub Brand di SKIP_SUBS (Lip Care) tidak dimasukkan.
 Kolom B:AC ditulis ke bawah data yang ada; kolom A (penanda manual "batas 18") tidak disentuh.
 TANPA CEK DUPLIKAT: jangan upload rentang tanggal yang sudah ada (app memberi peringatan).
 Kolom M, Z:AC ditulis sebagai rumus, sama dengan baris yang sudah ada di sheet.
+Ikut mengisi sheet gabungan AFF - TAP (import_comb.py) kecuali pakai --tanpa-gabungan.
+
+TERMINAL:
+    python import_tap.py "TAP GMV 19-25 OCT 2026.xlsx"            <- simulasi, tidak menulis apa-apa
+    python import_tap.py "TAP GMV 19-25 OCT 2026.xlsx" --apply    <- benar-benar menulis
+Product ID yang belum punya brand: dibuatkan Isi_Brand_<nama file>.xlsx, isi lalu jalankan lagi.
 """
+import argparse
 import collections
 import datetime
 import re
+import sys
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 import openpyxl
 
 import import_aff as ia
+import import_comb as ic
 
 TARGET_ID, TARGET_TAB = '1HfwlqHLKzZ11f9LCxwhqzUfm_kGeHtqzardBLFMFrak', 'all'
 SOURCE_TAB = 'Custom report'
@@ -159,7 +169,7 @@ def build_row(r, n, brand, sub):
 def read_dates(svc, sid=TARGET_ID):
     """(baris terakhir terisi di kolom B, Counter tanggal ISO -> jumlah baris) dari tab all."""
     vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!B2:B",
-                            valueRenderOption='UNFORMATTED_VALUE').execute().get('values', [])
+                            valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=3).get('values', [])
     base = datetime.date(1899, 12, 30)
     dates = collections.Counter(
         (base + datetime.timedelta(days=int(v[0]))).isoformat()
@@ -183,6 +193,88 @@ def write_rows(svc, out, first, sid=TARGET_ID):
         chunk = out[s:s + 2000]
         svc.values().update(
             spreadsheetId=sid, range=f"'{TARGET_TAB}'!B{first + s}:AC{first + s + len(chunk) - 1}",
-            valueInputOption='USER_ENTERED', body={'values': chunk}).execute()
+            valueInputOption='USER_ENTERED', body={'values': chunk}).execute(num_retries=3)
         print(f'Tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description='Import laporan TAP GMV (xlsx) ke tab "all" dan sheet gabungan.')
+    ap.add_argument('file')
+    ap.add_argument('--apply', action='store_true', help='benar-benar menulis ke Google Sheets')
+    ap.add_argument('--mapping', help='file isian Brand/Sub Brand (default Isi_Brand_<nama file>.xlsx)')
+    ap.add_argument('--tanpa-gabungan', action='store_true', help='jangan ikut update sheet gabungan AFF - TAP')
+    ap.add_argument('--hanya-gabungan', action='store_true',
+                    help='cuma update sheet gabungan (sheet utama sudah terisi, misal tadi gabungan gagal)')
+    a = ap.parse_args(argv)
+
+    src = Path(a.file)
+    print(f'Membaca {src.name} (file besar, bisa 2-3 menit)...')
+    try:
+        rows, scanned = read_raw(src)
+    except ValueError as e:
+        sys.exit(f'ERROR: {e}')
+    if not rows:
+        sys.exit('ERROR: tidak ada baris dengan GMV selain 0 di file ini.')
+    print(f'{scanned} baris dipindai, {len(rows)} baris dengan GMV selain 0.')
+    names, count = {}, collections.Counter()
+    for r in rows:
+        names.setdefault(r['Product ID'], r['Product name'])
+        count[r['Product ID']] += 1
+    mapping_file = Path(a.mapping) if a.mapping else src.with_name(f'Isi_Brand_{src.stem}.xlsx')
+
+    svc = ia.get_service(a.apply)
+    mapping, new_ids, unknown_in_sheet = ia.resolve(svc, list(names), names, count, mapping_file)
+    for p, row in unknown_in_sheet.items():
+        if p in names:
+            print(f'CATATAN: {p} ada di List Produk baris {row} dengan brand "{ia.UNKNOWN}"; '
+                  'isian dipakai untuk import ini, tapi baris itu tidak diubah script (ubah manual).')
+
+    rows, skipped = ia.drop_skipped(rows, mapping)
+    if skipped:
+        print(f'Dilewati (Sub Brand {sorted(ia.SKIP_SUBS)}): {len(skipped)} baris dari '
+              f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan.')
+    print(f'Baca tab {TARGET_TAB} untuk cari baris terakhir...')
+    first, last_row, out, dates = plan_rows(svc, rows, mapping)
+
+    in_file = collections.Counter(r['Date'] for r in rows)
+    gmv = sum(float(ia.num(r[GMV]) or 0) for r in rows)
+    by_brand = collections.Counter(mapping[r['Product ID']][0] for r in rows)
+    print(f'\nBaris: {len(out)} -> baris {first}-{first + len(out) - 1} di {TARGET_TAB} (baris terakhir sekarang {last_row})')
+    print(f'Tanggal: {", ".join(f"{d} ({n})" for d, n in sorted(in_file.items()))}')
+    print(f'All GMV: {gmv:,.0f}'.replace(',', '.'))
+    print('Per brand:', dict(by_brand))
+    overlap = {d: dates[d] for d in in_file if dates.get(d)}
+    if overlap:
+        print(f'PERINGATAN: tab {TARGET_TAB} sudah berisi {sum(overlap.values())} baris untuk {len(overlap)} tanggal yang '
+              f'juga ada di file ini ({min(overlap)} s/d {max(overlap)}). Kalau dilanjut, datanya dobel.')
+    print(f'ID baru untuk List Produk: {len(new_ids)}')
+    for p, name, brand, sub in new_ids:
+        print(f'  {p} | {name[:60]} | {brand} | {sub}')
+
+    comb_base = None if a.tanpa_gabungan else ic.tap_rows(rows, mapping)
+    if not a.apply:
+        if comb_base is not None:
+            ic.run(svc, comb_base, 'TAP', False)
+        print('\nDRY-RUN: tidak ada yang ditulis. Tambahkan --apply untuk menulis.')
+        return
+    if not out and not new_ids:
+        print('\nTidak ada yang perlu ditulis.')
+        return
+
+    if not a.hanya_gabungan:
+        ia.write_new_ids(svc, new_ids)
+        write_rows(svc, out, first)
+        ia.CACHE_FILE.write_text(ia.json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
+        print('Sheet utama selesai.')
+    if comb_base is not None:
+        try:
+            ic.run(svc, comb_base, 'TAP', True)
+        except ia.HttpError as e:
+            sys.exit(f'ERROR: sheet utama sudah selesai, tapi gagal update sheet gabungan: {ic.explain(e)}\n'
+                     'Setelah diperbaiki, jalankan lagi dengan --hanya-gabungan.')
+    print('\nSELESAI.')
+
+
+if __name__ == '__main__':
+    main()

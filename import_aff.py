@@ -30,8 +30,11 @@ import sys
 from pathlib import Path
 
 import openpyxl
+import google_auth_httplib2
+import httplib2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from openpyxl.worksheet.datavalidation import DataValidation
 
 HERE = Path(__file__).resolve().parent
@@ -143,11 +146,13 @@ def get_service(write, info=None):
         creds = service_account.Credentials.from_service_account_info(dict(info), scopes=[scope])
     else:
         creds = service_account.Credentials.from_service_account_file(str(CREDENTIALS_FILE), scopes=[scope])
-    return build('sheets', 'v4', credentials=creds).spreadsheets()
+    # timeout 3 menit: respons baca kolom panjang kadang lambat; bawaan 1 menit sering putus di jaringan lambat
+    http = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=180))
+    return build('sheets', 'v4', http=http, cache_discovery=False).spreadsheets()
 
 
 def grid_rows(svc, sid, tab):
-    meta = svc.get(spreadsheetId=sid, fields='sheets(properties(sheetId,title,gridProperties))').execute()
+    meta = svc.get(spreadsheetId=sid, fields='sheets(properties(sheetId,title,gridProperties))').execute(num_retries=3)
     for s in meta['sheets']:
         if s['properties']['title'] == tab:
             return s['properties']['sheetId'], s['properties']['gridProperties']['rowCount']
@@ -163,7 +168,7 @@ def ensure_rows(svc, sid, tab, last_row_needed):
 
 
 def read_brand_sheet(svc):
-    vals = svc.values().get(spreadsheetId=BRAND_ID, range=f"'{BRAND_TAB}'!A2:G").execute().get('values', [])
+    vals = svc.values().get(spreadsheetId=BRAND_ID, range=f"'{BRAND_TAB}'!A2:G").execute(num_retries=3).get('values', [])
     rows = []
     for i, r in enumerate(vals):
         r = [str(x).strip() for x in r] + [''] * (7 - len(r))
@@ -186,7 +191,7 @@ def last_filled_row(svc, sid=TARGET_ID):
     last = 1
     for start in range(2, total + 1, 50000):
         end = min(start + 49999, total)
-        vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute().get('values', [])
+        vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute(num_retries=3).get('values', [])
         if vals:
             last = start + len(vals) - 1
     return last
@@ -307,7 +312,7 @@ def write_new_ids(svc, new_ids):
         spreadsheetId=BRAND_ID, range=f"'{BRAND_TAB}'!A{brand_last + 1}:E{brand_last + len(new_ids)}",
         valueInputOption='USER_ENTERED',
         body={'values': [[n0 + i + 1, txt(p), txt(name), brand, sub]
-                         for i, (p, name, brand, sub) in enumerate(new_ids)]}).execute()
+                         for i, (p, name, brand, sub) in enumerate(new_ids)]}).execute(num_retries=3)
     print(f'{len(new_ids)} ID baru ditambah ke {BRAND_TAB}.')
     return len(new_ids)
 
@@ -320,7 +325,7 @@ def write_rows(svc, out, first, sid=TARGET_ID):
         chunk = out[s:s + 2000]
         svc.values().update(
             spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{first + s}:Z{first + s + len(chunk) - 1}",
-            valueInputOption='USER_ENTERED', body={'values': chunk}).execute()
+            valueInputOption='USER_ENTERED', body={'values': chunk}).execute(num_retries=3)
         print(f'Tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)
 
@@ -332,6 +337,9 @@ def main(argv=None):
     ap.add_argument('--apply', action='store_true', help='benar-benar menulis ke Google Sheets')
     ap.add_argument('--limit', type=int, help='cuma tulis N baris baru pertama (buat cek tampilan)')
     ap.add_argument('--mapping', help='file isian Brand/Sub Brand (default Isi_Brand_<nama file>.xlsx)')
+    ap.add_argument('--tanpa-gabungan', action='store_true', help='jangan ikut update sheet gabungan AFF - TAP')
+    ap.add_argument('--hanya-gabungan', action='store_true',
+                    help='cuma update sheet gabungan (sheet utama sudah terisi, misal tadi gabungan gagal)')
     a = ap.parse_args(argv)
 
     src = Path(a.file)
@@ -363,16 +371,28 @@ def main(argv=None):
     print(f'ID baru untuk List Produk: {len(new_ids)}')
     for p, name, brand, sub in new_ids:
         print(f'  {p} | {name[:60]} | {brand} | {sub}')
+    import import_comb as ic  # di sini, bukan di atas: import_comb sendiri mengimpor import_aff
+    comb_base = None if a.tanpa_gabungan else ic.aff_rows([rows[i] for i in new_idx], mapping)
     if not a.apply:
+        if comb_base is not None:
+            ic.run(svc, comb_base, 'SC', False)
         print('\nDRY-RUN: tidak ada yang ditulis. Tambahkan --apply untuk menulis.')
         return
     if not out and not new_ids:
         print('\nTidak ada yang perlu ditulis.')
         return
 
-    write_new_ids(svc, new_ids)
-    write_rows(svc, out, first)
-    CACHE_FILE.write_text(json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
+    if not a.hanya_gabungan:
+        write_new_ids(svc, new_ids)
+        write_rows(svc, out, first)
+        CACHE_FILE.write_text(json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
+        print('Sheet utama selesai.')
+    if comb_base is not None:
+        try:
+            ic.run(svc, comb_base, 'SC', True)
+        except HttpError as e:
+            sys.exit(f'ERROR: sheet utama sudah selesai, tapi gagal update sheet gabungan: {ic.explain(e)}\n'
+                     'Setelah diperbaiki, jalankan lagi dengan --hanya-gabungan.')
     print('\nSELESAI.')
 
 

@@ -83,7 +83,7 @@ def read_state(svc, sid=COMB_ID):
         end = min(start + CHUNK - 1, total)
         resp = svc.values().batchGet(spreadsheetId=sid, ranges=[f"'{COMB_TAB}'!A{start}:A{end}",
                                                                 f"'{COMB_TAB}'!K{start}:K{end}"],
-                                     valueRenderOption='UNFORMATTED_VALUE').execute()['valueRanges']
+                                     valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=3)['valueRanges']
         dates, sources = ([(x[0] if x else '') for x in vr.get('values', [])] for vr in resp)
         if dates:
             last = start + len(dates) - 1
@@ -120,6 +120,29 @@ def write_rows(svc, out, first, sid=COMB_ID):
         chunk = out[s:s + 2000]
         svc.values().update(
             spreadsheetId=sid, range=f"'{COMB_TAB}'!A{first + s}:T{first + s + len(chunk) - 1}",
-            valueInputOption='USER_ENTERED', body={'values': chunk}).execute()
+            valueInputOption='USER_ENTERED', body={'values': chunk}).execute(num_retries=3)
         print(f'Gabungan: tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)
+
+
+def explain(e):
+    """Pesan HttpError Google Sheets yang menyebut penyebab dan langkah berikutnya."""
+    status = getattr(getattr(e, 'resp', None), 'status', None)
+    if status == 403:
+        return 'tidak ada akses ke sheet gabungan. Bagikan sebagai Editor ke email service account di credentials.json.'
+    if status == 404:
+        return 'sheet gabungan tidak ditemukan. Cek COMB_ID di import_comb.py.'
+    return str(e)
+
+
+def run(svc, base, source, apply, sid=COMB_ID):
+    """Jalur terminal/desktop: rencana + peringatan tanggal, dan kalau apply, tulis ke sheet gabungan."""
+    first, last_row, out, seen = plan_rows(svc, base, sid)
+    print(f'\nSheet gabungan (tab {COMB_TAB}): {len(out)} baris Source {source} -> baris {first}-{first + len(out) - 1}'
+          f' (baris terakhir sekarang {last_row})')
+    ov = overlap(seen, source, base)
+    if ov:
+        print(f'PERINGATAN: sheet gabungan sudah berisi {sum(ov.values())} baris Source {source} untuk {len(ov)} tanggal '
+              f'yang juga ada di file ini ({min(ov)} s/d {max(ov)}). Kalau dilanjut, datanya dobel.')
+    if apply and out:
+        write_rows(svc, out, first, sid)
