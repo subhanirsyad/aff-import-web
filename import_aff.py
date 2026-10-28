@@ -340,7 +340,14 @@ def main(argv=None):
     ap.add_argument('--tanpa-gabungan', action='store_true', help='jangan ikut update sheet gabungan AFF - TAP')
     ap.add_argument('--hanya-gabungan', action='store_true',
                     help='cuma update sheet gabungan (sheet utama sudah terisi, misal tadi gabungan gagal)')
+    ap.add_argument('--sheet', help='link atau ID sheet tujuan AFF (default: TARGET_ID di atas)')
+    ap.add_argument('--sheet-gabungan', help='link atau ID sheet gabungan (default: COMB_ID di import_comb.py)')
     a = ap.parse_args(argv)
+    try:
+        sid = sheet_id_from(a.sheet) if a.sheet else TARGET_ID
+        csid = sheet_id_from(a.sheet_gabungan) if a.sheet_gabungan else None
+    except ValueError as e:
+        sys.exit(f'ERROR: {e}')
 
     src = Path(a.file)
     rows = read_raw(src)
@@ -363,7 +370,7 @@ def main(argv=None):
         print(f'Dilewati (Sub Brand {sorted(SKIP_SUBS)}): {len(skipped)} baris dari '
               f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan ke ALL.')
     print('Baca tab ALL untuk cari baris terakhir...')
-    new_idx, first, last_row, out = plan_rows(svc, rows, mapping, a.limit)
+    new_idx, first, last_row, out = plan_rows(svc, rows, mapping, a.limit, sid)
 
     by_brand = collections.Counter(mapping[rows[i]['Product ID']][0] for i in new_idx)
     print(f'\nBaris baru: {len(new_idx)} -> baris {first}-{first + len(out) - 1} di ALL (baris terakhir sekarang {last_row})')
@@ -373,9 +380,10 @@ def main(argv=None):
         print(f'  {p} | {name[:60]} | {brand} | {sub}')
     import import_comb as ic  # di sini, bukan di atas: import_comb sendiri mengimpor import_aff
     comb_base = None if a.tanpa_gabungan else ic.aff_rows([rows[i] for i in new_idx], mapping)
+    csid = csid or ic.COMB_ID
     if not a.apply:
         if comb_base is not None:
-            ic.run(svc, comb_base, 'SC', False)
+            ic.run(svc, comb_base, 'SC', False, csid)
         print('\nDRY-RUN: tidak ada yang ditulis. Tambahkan --apply untuk menulis.')
         return
     if not out and not new_ids:
@@ -384,12 +392,12 @@ def main(argv=None):
 
     if not a.hanya_gabungan:
         write_new_ids(svc, new_ids)
-        write_rows(svc, out, first)
+        write_rows(svc, out, first, sid)
         CACHE_FILE.write_text(json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
         print('Sheet utama selesai.')
     if comb_base is not None:
         try:
-            ic.run(svc, comb_base, 'SC', True)
+            ic.run(svc, comb_base, 'SC', True, csid)
         except HttpError as e:
             sys.exit(f'ERROR: sheet utama sudah selesai, tapi gagal update sheet gabungan: {ic.explain(e)}\n'
                      'Setelah diperbaiki, jalankan lagi dengan --hanya-gabungan.')

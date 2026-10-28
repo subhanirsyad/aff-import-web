@@ -206,7 +206,14 @@ def main(argv=None):
     ap.add_argument('--tanpa-gabungan', action='store_true', help='jangan ikut update sheet gabungan AFF - TAP')
     ap.add_argument('--hanya-gabungan', action='store_true',
                     help='cuma update sheet gabungan (sheet utama sudah terisi, misal tadi gabungan gagal)')
+    ap.add_argument('--sheet', help='link atau ID sheet tujuan TAP (default: TARGET_ID di atas)')
+    ap.add_argument('--sheet-gabungan', help='link atau ID sheet gabungan (default: COMB_ID di import_comb.py)')
     a = ap.parse_args(argv)
+    try:
+        sid = ia.sheet_id_from(a.sheet) if a.sheet else TARGET_ID
+        csid = ia.sheet_id_from(a.sheet_gabungan) if a.sheet_gabungan else ic.COMB_ID
+    except ValueError as e:
+        sys.exit(f'ERROR: {e}')
 
     src = Path(a.file)
     print(f'Membaca {src.name} (file besar, bisa 2-3 menit)...')
@@ -235,7 +242,7 @@ def main(argv=None):
         print(f'Dilewati (Sub Brand {sorted(ia.SKIP_SUBS)}): {len(skipped)} baris dari '
               f'{len({r["Product ID"] for r in skipped})} produk, tidak dimasukkan.')
     print(f'Baca tab {TARGET_TAB} untuk cari baris terakhir...')
-    first, last_row, out, dates = plan_rows(svc, rows, mapping)
+    first, last_row, out, dates = plan_rows(svc, rows, mapping, sid)
 
     in_file = collections.Counter(r['Date'] for r in rows)
     gmv = sum(float(ia.num(r[GMV]) or 0) for r in rows)
@@ -255,7 +262,7 @@ def main(argv=None):
     comb_base = None if a.tanpa_gabungan else ic.tap_rows(rows, mapping)
     if not a.apply:
         if comb_base is not None:
-            ic.run(svc, comb_base, 'TAP', False)
+            ic.run(svc, comb_base, 'TAP', False, csid)
         print('\nDRY-RUN: tidak ada yang ditulis. Tambahkan --apply untuk menulis.')
         return
     if not out and not new_ids:
@@ -264,12 +271,12 @@ def main(argv=None):
 
     if not a.hanya_gabungan:
         ia.write_new_ids(svc, new_ids)
-        write_rows(svc, out, first)
+        write_rows(svc, out, first, sid)
         ia.CACHE_FILE.write_text(ia.json.dumps(mapping, ensure_ascii=False), encoding='utf-8')
         print('Sheet utama selesai.')
     if comb_base is not None:
         try:
-            ic.run(svc, comb_base, 'TAP', True)
+            ic.run(svc, comb_base, 'TAP', True, csid)
         except ia.HttpError as e:
             sys.exit(f'ERROR: sheet utama sudah selesai, tapi gagal update sheet gabungan: {ic.explain(e)}\n'
                      'Setelah diperbaiki, jalankan lagi dengan --hanya-gabungan.')
