@@ -168,7 +168,8 @@ def build_row(r, n, brand, sub):
 
 def read_dates(svc, sid=TARGET_ID):
     """(baris terakhir terisi di kolom B, Counter tanggal ISO -> jumlah baris) dari tab all."""
-    vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!B2:B",
+    tab = ia.tab_info(svc, sid, TARGET_TAB)[0]  # 'all' vs 'ALL': API menolak kalau huruf beda
+    vals = svc.values().get(spreadsheetId=sid, range=f"'{tab}'!B2:B",
                             valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=3).get('values', [])
     base = datetime.date(1899, 12, 30)
     dates = collections.Counter(
@@ -189,10 +190,11 @@ def write_rows(svc, out, first, sid=TARGET_ID):
     if not out:
         return 0
     ia.ensure_rows(svc, sid, TARGET_TAB, first + len(out) - 1)
+    tab = ia.tab_info(svc, sid, TARGET_TAB)[0]
     for s in range(0, len(out), 2000):
         chunk = out[s:s + 2000]
         svc.values().update(
-            spreadsheetId=sid, range=f"'{TARGET_TAB}'!B{first + s}:AC{first + s + len(chunk) - 1}",
+            spreadsheetId=sid, range=f"'{tab}'!B{first + s}:AC{first + s + len(chunk) - 1}",
             valueInputOption='USER_ENTERED', body={'values': chunk}).execute(num_retries=3)
         print(f'Tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)

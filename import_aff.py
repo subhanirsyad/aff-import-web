@@ -151,12 +151,21 @@ def get_service(write, info=None):
     return build('sheets', 'v4', http=http, cache_discovery=False).spreadsheets()
 
 
-def grid_rows(svc, sid, tab):
+def tab_info(svc, sid, tab):
+    """(nama tab sebenarnya, sheetId, jumlah baris). Nama dicocokkan tanpa peduli huruf besar/kecil
+    ('all' vs 'ALL'); API Sheets menolak rentang kalau nama tab beda huruf ('Unable to parse range')."""
     meta = svc.get(spreadsheetId=sid, fields='sheets(properties(sheetId,title,gridProperties))').execute(num_retries=3)
-    for s in meta['sheets']:
-        if s['properties']['title'] == tab:
-            return s['properties']['sheetId'], s['properties']['gridProperties']['rowCount']
-    sys.exit(f'ERROR: tab "{tab}" tidak ketemu.')
+    sheets = [s['properties'] for s in meta['sheets']]
+    for p in sorted(sheets, key=lambda p: p['title'] != tab):  # persis dulu, baru beda huruf
+        if p['title'].lower() == tab.lower():
+            return p['title'], p['sheetId'], p['gridProperties']['rowCount']
+    sys.exit(f'ERROR: tab "{tab}" tidak ketemu di sheet ini. Tab yang ada: {", ".join(p["title"] for p in sheets)}. '
+             'Cek link sheet tujuan.')
+
+
+def grid_rows(svc, sid, tab):
+    _, tab_id, rows = tab_info(svc, sid, tab)
+    return tab_id, rows
 
 
 def ensure_rows(svc, sid, tab, last_row_needed):
@@ -187,11 +196,11 @@ def sheet_id_from(link):
 
 def last_filled_row(svc, sid=TARGET_ID):
     """Baris terakhir yang terisi di kolom A tab ALL."""
-    _, total = grid_rows(svc, sid, TARGET_TAB)
+    tab, _, total = tab_info(svc, sid, TARGET_TAB)
     last = 1
     for start in range(2, total + 1, 50000):
         end = min(start + 49999, total)
-        vals = svc.values().get(spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{start}:A{end}").execute(num_retries=3).get('values', [])
+        vals = svc.values().get(spreadsheetId=sid, range=f"'{tab}'!A{start}:A{end}").execute(num_retries=3).get('values', [])
         if vals:
             last = start + len(vals) - 1
     return last
@@ -321,10 +330,11 @@ def write_rows(svc, out, first, sid=TARGET_ID):
     if not out:
         return 0
     ensure_rows(svc, sid, TARGET_TAB, first + len(out) - 1)
+    tab = tab_info(svc, sid, TARGET_TAB)[0]
     for s in range(0, len(out), 2000):
         chunk = out[s:s + 2000]
         svc.values().update(
-            spreadsheetId=sid, range=f"'{TARGET_TAB}'!A{first + s}:Z{first + s + len(chunk) - 1}",
+            spreadsheetId=sid, range=f"'{tab}'!A{first + s}:Z{first + s + len(chunk) - 1}",
             valueInputOption='USER_ENTERED', body={'values': chunk}).execute(num_retries=3)
         print(f'Tertulis {s + len(chunk)}/{len(out)} baris.')
     return len(out)
