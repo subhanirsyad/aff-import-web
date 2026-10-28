@@ -7,9 +7,12 @@ Jalankan lokal:  streamlit run aff_web/app.py   (butuh .streamlit/secrets.toml, 
 """
 import base64
 import collections
+import contextlib
 import functools
+import io
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -86,52 +89,75 @@ def plan_comb(csid, ckey, _base):
     return ic.plan_rows(ia.get_service(False, sa_info()), _base, csid)
 
 
-# Tampilan hitam-putih ala dashboard Cussons: latar abu muda, kartu putih, sidebar hitam, tombol emas.
+# Tampilan sama dengan app import Cussons/NPURE/Blood (Streamlit_Import): latar abu, kartu putih berbayang,
+# sidebar hitam, tombol aksi emas, layar masuk berkartu.
 CSS = """<style>
-[data-testid="stHeader"] {background:transparent}
-.block-container {padding-top:2rem; max-width:1200px}
-[data-testid="stSidebar"] {background:#000; border-right:1px solid rgba(255,255,255,.18)}
-[data-testid="stSidebar"] * {color:#fff}
-[data-testid="stSidebar"] button {background:none; border:1px solid rgba(255,255,255,.18); border-radius:6px}
-[data-testid="stSidebar"] button:hover {border-color:#fff}
-.side-logo {height:32px; display:block}
-.side-brand {margin:10px 0 24px; color:#c6cbc7; font-size:13px}
-[data-testid="stSidebarUserContent"] {display:flex; flex-direction:column; min-height:calc(100vh - 2rem)}
-[data-testid="stSidebarUserContent"] > div {flex:1; display:flex; flex-direction:column}
-[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {flex:1}
-[data-testid="stSidebar"] [data-testid="stElementContainer"]:has([data-testid="stRadio"]) {width:100% !important}
-[data-testid="stSidebar"] [data-testid="stRadio"] {width:100%}
-[data-testid="stSidebar"] [data-testid="stLayoutWrapper"]:has(> .st-key-side_foot) {margin-top:auto}
-[data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] {gap:2px; align-items:stretch}
-[data-testid="stSidebar"] [data-testid="stRadio"] label {width:100%; padding:10px 12px; border-radius:4px; font-weight:500; cursor:pointer}
-[data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child {display:none}
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] {gap:2px; align-items:stretch}
-[data-testid="stSidebar"] [data-testid="stRadioOption"] {width:100%; box-sizing:border-box}
-[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:first-child:not([data-testid="stMarkdownContainer"]) {display:none}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {background:rgba(255,255,255,.12)}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {background:#fff}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) * {color:#000}
-.st-key-side_foot {gap:12px; padding-top:16px; border-top:1px solid rgba(255,255,255,.18)}
-.user {display:flex; gap:10px; align-items:center; min-width:0; margin:4px 0 12px}
-.avatar {width:32px; height:32px; border-radius:50%; background:#fff; display:grid; place-items:center; font-weight:700; flex:none}
-[data-testid="stSidebar"] .avatar {color:#000}
-.me {font-size:13px; color:#c6cbc7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.login-logo {height:44px; display:block; margin-bottom:18px}
-.hero {background:#000; color:#fff; border-radius:12px; padding:26px 30px; margin-bottom:20px}
-.hero h1 {color:#fff; font-size:28px; margin:0; padding:0}
-.hero p {color:#c6cbc7; margin:6px 0 0}
-[data-testid="stMetric"] {background:#fff; border-radius:10px; padding:16px 18px;
-  border:1px solid #e4e4e7}
-[data-testid="stMetricLabel"] * {color:#6b6b6b}
-[data-testid="stBaseButton-primary"], button[kind="primary"] {background:#ffd700; border:0; border-radius:6px; font-weight:700}
-[data-testid="stBaseButton-primary"] *, button[kind="primary"] * {color:#000}
-[data-testid="stBaseButton-primary"]:hover, button[kind="primary"]:hover {filter:brightness(.95)}
-[data-testid="stAlert"] {background:#fff; border:1px solid #000; border-radius:8px}
-[data-testid="stAlert"] * {color:#000}
-[data-testid="stFileUploader"] section {background:#fff; border:1px dashed #000; border-radius:8px}
-[data-testid="stDataFrame"], [data-testid="stDataEditor"] {border:1px solid #e4e4e7; border-radius:8px}
-h2, h3 {color:#000}
+:root{--bg:#f4f4f5;--panel:#fff;--ink:#000;--ink2:#3d3d3d;--muted:#6b6b6b;--line:#e4e4e7;--gold:#ffd700;
+  --shadow:0 1px 2px rgba(16,16,16,.05),0 8px 24px rgba(16,16,16,.06)}
+html,body,[data-testid="stApp"]{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-variant-numeric:tabular-nums}
+[data-testid="stApp"],[data-testid="stAppViewContainer"]{background:var(--bg)}
+[data-testid="stHeader"]{background:transparent}
+[data-testid="stToolbar"],[data-testid="stDecoration"],#MainMenu,footer{display:none}
+.block-container{max-width:1280px;padding:28px 32px 64px}
+
+/* sidebar */
+section[data-testid="stSidebar"]{background:#000;width:250px !important;min-width:250px !important;border-right:1px solid rgba(255,255,255,.18)}
+section[data-testid="stSidebar"] *{color:#fff}
+section[data-testid="stSidebar"] .side-brand{color:#c6cbc7;font-size:13px;margin:10px 0 12px}
+section[data-testid="stSidebar"] .side-label{color:#c6cbc7;font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin:20px 0 6px}
+section[data-testid="stSidebar"] .stButton button{background:transparent;border:1px solid transparent;border-radius:4px;
+  justify-content:flex-start;padding:10px 12px;min-height:44px;font-weight:500;text-align:left}
+section[data-testid="stSidebar"] .stButton button > div,section[data-testid="stSidebar"] .stButton button p{width:100%;justify-content:flex-start;text-align:left}
+section[data-testid="stSidebar"] .stButton button:hover{background:rgba(255,255,255,.12)}
+section[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"]{background:#fff;border-color:#fff}
+section[data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] *{color:#000}
+section[data-testid="stSidebar"] .st-key-reload button,section[data-testid="stSidebar"] .st-key-logout button{
+  border:1px solid rgba(255,255,255,.18);border-radius:6px;font-size:13px}
+.user{display:flex;gap:10px;align-items:center;min-width:0;padding-top:16px;border-top:1px solid rgba(255,255,255,.18);margin-top:24px}
+.avatar{width:32px;height:32px;border-radius:50%;background:#fff;color:#000 !important;display:grid;place-items:center;font-weight:700;flex:none;overflow:hidden}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.uname{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.umail{color:#c6cbc7 !important;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* judul halaman */
+h1.ptitle{font-size:32px;line-height:1.1;margin:0 0 6px;letter-spacing:-.01em;padding:0}
+.psub{margin:0 0 24px;color:var(--muted);font-size:16px}
+
+/* tombol utama = emas (hanya tombol aksi) */
+.stMain .stButton button[data-testid="stBaseButton-primary"]{background:var(--gold);color:#000;border:0;border-radius:6px;
+  font-weight:700;min-height:44px}
+.stMain .stButton button[data-testid="stBaseButton-primary"] *{color:#000}
+.stMain .stButton button[data-testid="stBaseButton-primary"]:hover{filter:brightness(.95)}
+.stMain .stButton button[data-testid="stBaseButton-primary"]:disabled{opacity:.5}
+
+/* kartu isi */
+.st-key-form,.st-key-summary{background:var(--panel);border-radius:10px;padding:22px 24px;box-shadow:var(--shadow)}
+.st-key-summary{margin-top:24px}
+.banner{display:flex;gap:10px;align-items:flex-start;border:1px solid #000;background:var(--panel);border-radius:8px;padding:12px 14px;margin:12px 0}
+.banner.bad{border-color:#d03b3b;background:#fbe9e9}
+
+/* ringkasan: metrik, tabel, uploader */
+[data-testid="stMetric"]{background:var(--bg);border-radius:10px;padding:16px 18px}
+[data-testid="stMetricLabel"] *{color:var(--muted)}
+[data-testid="stFileUploader"] section{background:#fff;border:1px dashed #000;border-radius:8px}
+[data-testid="stDataFrame"],[data-testid="stDataEditor"]{border:1px solid var(--line);border-radius:8px}
+h2,h3{color:#000}
+
+/* login */
+.st-key-login{background:var(--panel);border:1px solid #000;overflow:hidden;gap:0 !important}
+.login-head{background:#000;padding:28px 24px}
+.login-head img{height:56px;display:block}
+.login-body{padding:24px 24px 8px}
+.login-body h1{margin:0 0 6px;font-size:22px;padding:0}
+.login-body p{margin:0 0 12px;color:var(--ink2)}
+.st-key-login [data-testid="stElementContainer"]:has(.stButton){padding:0 24px 24px}
+.st-key-login .stButton button{background:#000;color:#fff;border:0;border-radius:6px;min-height:44px;font-weight:700}
+.st-key-login .stButton button *{color:#fff}
+
+@media (max-width:720px){.block-container{padding:20px 16px 40px}h1.ptitle{font-size:25px}}
 </style>"""
+
+MENU = {'AFF': 'Raw Affiliate', 'TAP': 'TAP GMV'}
 
 
 @functools.cache
@@ -139,27 +165,103 @@ def logo_uri():
     return 'data:image/png;base64,' + base64.b64encode((HERE / 'logo-wei.png').read_bytes()).decode()
 
 
-def hero(sub, title='Import Affiliate TikTok', logo=False):
-    img = f'<img class="login-logo" src="{logo_uri()}" alt="WEI">' if logo else ''
-    st.markdown(f'<div class="hero">{img}<h1>{title}</h1><p>{sub}</p></div>', unsafe_allow_html=True)
+def header(title, sub):
+    st.markdown(f'<h1 class="ptitle">{title}</h1><p class="psub">{sub}</p>', unsafe_allow_html=True)
+
+
+def login_page(message=None, can_logout=False):
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        st.markdown('<div style="height:12vh"></div>', unsafe_allow_html=True)
+        with st.container(key='login'):
+            st.markdown(
+                f'<div class="login-head"><img src="{logo_uri()}" alt="WEI"></div>'
+                f'<div class="login-body"><h1>Masuk</h1><p>Gunakan akun Google @{DOMAIN}.</p>'
+                + (f'<div class="banner bad">{message}</div>' if message else '') + '</div>',
+                unsafe_allow_html=True)
+            if can_logout:
+                st.button('Keluar dan coba akun lain', on_click=st.logout, width='stretch')
+            else:
+                st.button('Masuk dengan Google', on_click=st.login, width='stretch')
 
 
 def sidebar(email):
-    """Sidebar gaya dashboard Cussons: logo, menu kotak, lalu akun di bawah. Mengembalikan menu yang dipilih."""
+    """Sidebar gaya import Cussons: logo, menu, akun. Mengembalikan menu yang dipilih ('AFF' / 'TAP')."""
+    label = st.user.get('name') or email.split('@')[0]
+    pic = st.user.get('picture')
+    avatar = f'<img src="{pic}" alt="" referrerpolicy="no-referrer">' if pic else (label[:1] or '?').upper()
     with st.sidebar:
-        st.markdown(f'<img class="side-logo" src="{logo_uri()}" alt="WEI"><div class="side-brand">Import TikTok</div>',
+        st.markdown(f'<img src="{logo_uri()}" alt="WEI" style="height:32px"><div class="side-brand">Import TikTok</div>'
+                    '<div class="side-label">Import</div>', unsafe_allow_html=True)
+        for page, text in MENU.items():
+            if st.button(text, key=f'nav_{page}', width='stretch',
+                         type='primary' if st.session_state.page == page else 'secondary'):
+                st.session_state.page = page
+                st.rerun()
+        st.markdown('<div class="side-label">Data</div>', unsafe_allow_html=True)
+        if st.button('Muat ulang data brand', key='reload', width='stretch'):
+            brand_data.clear()
+            plan.clear()
+            plan_tap.clear()
+            plan_comb.clear()
+        st.markdown(f'<div class="user"><div class="avatar">{avatar}</div><div style="min-width:0">'
+                    f'<div class="uname">{label}</div><div class="umail">{email}</div></div></div>',
                     unsafe_allow_html=True)
-        page = st.radio('Menu', ['AFF', 'TAP'], label_visibility='collapsed')
-        with st.container(key='side_foot'):
-            if st.button('Muat ulang data brand', width='stretch'):
-                brand_data.clear()
-                plan.clear()
-                plan_tap.clear()
-                plan_comb.clear()
-            st.markdown(f'<div class="user"><div class="avatar">{email[:1].upper()}</div>'
-                        f'<div class="me">{email}</div></div>', unsafe_allow_html=True)
-            st.button('Keluar', on_click=st.logout, width='stretch')
-    return page
+        st.button('Keluar', key='logout', on_click=st.logout, width='stretch')
+    return st.session_state.page
+
+
+class LogWriter(io.TextIOBase):
+    """Tampung print() dari fungsi tulis: tampil live di kotak kode, dan tetap diteruskan ke log server
+    (baris '[APPLY] ...' dipakai sebagai jejak siapa mengimpor apa)."""
+
+    def __init__(self, box):
+        self.box, self.buf, self.t, self.tee = box, '', 0.0, sys.stdout
+
+    def write(self, s):
+        self.buf += s
+        self.tee.write(s)
+        if time.time() - self.t > 0.3:
+            self.flush()
+        return len(s)
+
+    def flush(self):
+        self.box.code(self.buf[-30000:] or ' ', language=None)
+        self.t = time.time()
+
+
+@contextlib.contextmanager
+def capture(key, label, append=False):
+    """Jalankan blok di kotak status dengan log live. Log disimpan per `key` supaya tetap tampil setelah rerun.
+    Error Google Sheets ditulis ke log lalu dilempar lagi (pemanggil menampilkan st.error)."""
+    store = st.session_state.setdefault('runlog', {})
+    with st.status(label, expanded=True) as status:
+        log = LogWriter(st.empty())
+        if append:
+            log.buf = store.get(key, '')
+        try:
+            with contextlib.redirect_stdout(log):
+                yield log
+        except (HttpError, SystemExit) as e:
+            log.write(f'\nERROR: {explain(e, "menulis ke Google Sheets")}\n')
+            status.update(label='Gagal, lihat log', state='error', expanded=True)
+            raise
+        else:
+            status.update(label='Selesai', state='complete')
+        finally:
+            log.flush()
+            store[key] = log.buf
+
+
+def show_result(key):
+    """Pesan hasil import terakhir + lognya (kalau ada) untuk file/tujuan ini."""
+    done = st.session_state.get('done', (None, ''))
+    if done[0] == key:
+        st.success(done[1])
+    log = st.session_state.get('runlog', {}).get(key)
+    if log:
+        st.caption('Log import')
+        st.code(log[-30000:], language=None)
 
 
 def explain(e, doing):
@@ -213,7 +315,8 @@ def comb_retry(key, email, name, csid=None):
     if fail and fail[0] == key:
         st.error(f'Import ke sheet tujuan sudah selesai, tapi {fail[3]}')
         if st.button('Coba lagi update sheet gabungan', key='retry_comb'):
-            msg = comb_write(csid or fail[1], fail[2], email, name, key)
+            with capture(key, 'Menulis ke sheet gabungan...', append=True):
+                msg = comb_write(csid or fail[1], fail[2], email, name, key)
             if msg:
                 st.session_state['done'] = (key, msg.strip())
             st.rerun()
@@ -288,8 +391,7 @@ def flow(sid, csid, name, data, email):
         return
 
     key = (sid, name, len(data))
-    if st.session_state.get('done', (None, ''))[0] == key:
-        st.success(st.session_state['done'][1])
+    show_result(key)
     comb_retry(key, email, name, csid)
     comb_base = ic.aff_rows(rows, mapping)
 
@@ -336,21 +438,23 @@ def flow(sid, csid, name, data, email):
 
     if st.button('Jalankan Import', type='primary', disabled=not (out or new_ids)):
         try:
-            with st.spinner('Menulis ke Google Sheets...'):
+            with capture(key, 'Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
                 # hitung ulang tepat sebelum menulis, supaya aman kalau ada yang menulis di antaranya
                 _, first, _, out = ia.plan_rows(svc, rows, mapping, sid=sid)
+                print(f'Import {name}: {n(len(out))} baris ke tab {ia.TARGET_TAB} mulai baris {first}, {len(new_ids)} ID baru.')
                 n_ids = ia.write_new_ids(svc, new_ids)
                 n_rows = ia.write_rows(svc, out, first, sid)
-            print(f'[APPLY] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
-            extra = comb_write(csid, comb_base, email, name, key)
+                print(f'[APPLY] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
+                extra = comb_write(csid, comb_base, email, name, key)
+        except (HttpError, SystemExit) as e:
+            st.error(explain(e, 'menulis ke Google Sheets'))
+        else:
             st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
                                               f'{n_ids} ID baru ke List Produk.{extra}')
             plan.clear()
             brand_data.clear()
             st.rerun()
-        except (HttpError, SystemExit) as e:
-            st.error(explain(e, 'menulis ke Google Sheets'))
 
 
 def flow_tap(sid, csid, name, data, email):
@@ -382,8 +486,7 @@ def flow_tap(sid, csid, name, data, email):
         return
 
     key = ('tap', sid, name, len(data))
-    if st.session_state.get('done', (None, ''))[0] == key:
-        st.success(st.session_state['done'][1])
+    show_result(key)
     comb_retry(key, email, name, csid)
     comb_base = ic.tap_rows(rows, mapping)
 
@@ -437,20 +540,22 @@ def flow_tap(sid, csid, name, data, email):
 
     if st.button('Jalankan Import', type='primary', disabled=not (out or new_ids), key='run_tap'):
         try:
-            with st.spinner('Menulis ke Google Sheets...'):
+            with capture(key, 'Menulis ke Google Sheets...'):
                 svc = ia.get_service(True, sa_info())
                 first, _, out, _ = it.plan_rows(svc, rows, mapping, sid)  # hitung ulang tepat sebelum menulis
+                print(f'Import {name}: {n(len(out))} baris ke tab {it.TARGET_TAB} mulai baris {first}, {len(new_ids)} ID baru.')
                 n_ids = ia.write_new_ids(svc, new_ids)
                 n_rows = it.write_rows(svc, out, first, sid)
-            print(f'[APPLY TAP] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
-            extra = comb_write(csid, comb_base, email, name, key)
+                print(f'[APPLY TAP] {email} | {name} | {n_rows} baris di {first}, {n_ids} ID baru')
+                extra = comb_write(csid, comb_base, email, name, key)
+        except (HttpError, SystemExit) as e:
+            st.error(explain(e, 'menulis ke Google Sheets'))
+        else:
             st.session_state['done'] = (key, f'Selesai: {n(n_rows)} baris ditulis mulai baris {first}, '
                                               f'{n_ids} ID baru ke List Produk.{extra}')
             plan_tap.clear()
             brand_data.clear()
             st.rerun()
-        except (HttpError, SystemExit) as e:
-            st.error(explain(e, 'menulis ke Google Sheets'))
 
 
 def sheet_link(default_id, tab, key):
@@ -478,36 +583,38 @@ def comb_link(key):
 
 
 def main():
-    st.set_page_config(page_title='Import Affiliate TikTok', layout='wide')
+    st.set_page_config(page_title='Import Affiliate TikTok · WEI', layout='wide', initial_sidebar_state='expanded')
     st.markdown(CSS, unsafe_allow_html=True)
     if not st.user.is_logged_in:
-        _, mid, _ = st.columns([1, 1.4, 1])
-        with mid:
-            hero(f'Masuk dengan akun Google perusahaan (@{DOMAIN}).', logo=True)
-            st.button('Login dengan Google', on_click=st.login, type='primary', width='stretch')
+        login_page()
         st.stop()
     email = st.user.get('email')
     if not allowed(email, st.user.get('email_verified'), st.secrets.get('allowed_emails', [])):
-        st.error(f'Akun {email} tidak punya akses. Pakai akun @{DOMAIN}.')
-        st.button('Keluar', on_click=st.logout)
+        login_page(f'Akun {email} tidak punya akses. Pakai akun @{DOMAIN}.', can_logout=True)
         st.stop()
 
+    st.session_state.setdefault('page', 'AFF')
     page = sidebar(email)
     if page == 'TAP':
-        hero('Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu Jalankan Import. '
-             'Hanya baris dengan GMV selain 0 yang dibawa.', 'Import TAP GMV')
-        sid = sheet_link(it.TARGET_ID, it.TARGET_TAB, 'link_tap')
-        csid = comb_link('link_comb_tap')
-        up = st.file_uploader('File TAP GMV (Excel)', type=['xlsx', 'xlsm'], key='up_tap')
+        header('Import TAP GMV', 'Upload laporan TAP GMV (xlsx), isi brand yang belum ada, cek ringkasan, lalu '
+                                 'Jalankan Import. Hanya baris dengan GMV selain 0 yang dibawa.')
+        with st.container(key='form'):
+            sid = sheet_link(it.TARGET_ID, it.TARGET_TAB, 'link_tap')
+            csid = comb_link('link_comb_tap')
+            up = st.file_uploader('File TAP GMV (Excel)', type=['xlsx', 'xlsm'], key='up_tap')
         if up:
-            flow_tap(sid, csid, up.name, up.getvalue(), email)
+            with st.container(key='summary'):
+                flow_tap(sid, csid, up.name, up.getvalue(), email)
         return
-    hero('Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, lalu Jalankan Import.')
-    sid = sheet_link(ia.TARGET_ID, ia.TARGET_TAB, 'link_aff')
-    csid = comb_link('link_comb_aff')
-    up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'], key='up_aff')
+    header('Import Raw Affiliate', 'Satu file per kali: upload file, isi brand yang belum ada, cek ringkasan, '
+                                   'lalu Jalankan Import.')
+    with st.container(key='form'):
+        sid = sheet_link(ia.TARGET_ID, ia.TARGET_TAB, 'link_aff')
+        csid = comb_link('link_comb_aff')
+        up = st.file_uploader('File raw AFF (CSV / Excel)', type=['csv', 'xlsx', 'xlsm'], key='up_aff')
     if up:
-        flow(sid, csid, up.name, up.getvalue(), email)
+        with st.container(key='summary'):
+            flow(sid, csid, up.name, up.getvalue(), email)
 
 
 if __name__ == '__main__':
