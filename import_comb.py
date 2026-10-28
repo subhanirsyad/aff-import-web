@@ -20,6 +20,7 @@ import import_aff as ia
 
 COMB_ID, COMB_TAB = '1tUb-7HE6opq99115OaoHdKVy-drM-NAhsqIRH8DCaoc', '1-31 (all)'
 CHUNK = 40000
+WINDOW = 150000  # jumlah baris terakhir yang dihitung untuk peringatan tanggal sudah ada
 KREATOR = "'LIST KREATOR'"
 
 
@@ -74,19 +75,19 @@ def with_formulas(vals, n):
 
 def read_state(svc, sid=COMB_ID):
     """(baris terakhir terisi di kolom A, Counter (source, tanggal ISO) -> jumlah baris).
+    Baris terakhir dicari dari ujung bawah. Hitungan tanggal hanya dari WINDOW baris terakhir (sekitar 3 minggu data),
+    supaya waktunya tidak ikut membesar; duplikat yang lebih lama dari itu tidak diperingatkan.
     Dibaca per 40 ribu baris: httplib2 menolak respons yang terbuka lebih dari 10 MB dengan rasio kompresi > 100,
     dan kolom A/K sheet ini sangat repetitif."""
-    _, total = ia.grid_rows(svc, sid, COMB_TAB)
+    last = ia.last_row_in_col(svc, sid, COMB_TAB, 'A')
     base = datetime.date(1899, 12, 30)
-    seen, last = collections.Counter(), 1
-    for start in range(2, total + 1, CHUNK):
-        end = min(start + CHUNK - 1, total)
+    seen = collections.Counter()
+    for start in range(max(2, last - WINDOW + 1), last + 1, CHUNK):
+        end = min(start + CHUNK - 1, last)
         resp = svc.values().batchGet(spreadsheetId=sid, ranges=[f"'{COMB_TAB}'!A{start}:A{end}",
                                                                 f"'{COMB_TAB}'!K{start}:K{end}"],
                                      valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=3)['valueRanges']
         dates, sources = ([(x[0] if x else '') for x in vr.get('values', [])] for vr in resp)
-        if dates:
-            last = start + len(dates) - 1
         for d, src in itertools.zip_longest(dates, sources, fillvalue=''):
             if isinstance(d, (int, float)):
                 iso = (base + datetime.timedelta(days=int(d))).isoformat()
@@ -136,9 +137,13 @@ def explain(e):
 
 
 def run(svc, base, source, apply, sid=COMB_ID):
-    """Jalur terminal/desktop: rencana, dan kalau apply, tulis ke sheet gabungan."""
+    """Jalur terminal/desktop: rencana + peringatan tanggal, dan kalau apply, tulis ke sheet gabungan."""
     first, last_row, out, seen = plan_rows(svc, base, sid)
     print(f'\nSheet gabungan (tab {COMB_TAB}): {len(out)} baris Source {source} -> baris {first}-{first + len(out) - 1}'
           f' (baris terakhir sekarang {last_row})')
+    ov = overlap(seen, source, base)
+    if ov:
+        print(f'PERINGATAN: sheet gabungan sudah berisi {sum(ov.values())} baris Source {source} untuk {len(ov)} tanggal '
+              f'yang juga ada di file ini ({min(ov)} s/d {max(ov)}). Kalau dilanjut, datanya dobel.')
     if apply and out:
         write_rows(svc, out, first, sid)
