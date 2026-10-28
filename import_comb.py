@@ -136,13 +136,9 @@ def explain(e):
 
 
 def run(svc, base, source, apply, sid=COMB_ID):
-    """Jalur terminal/desktop: rencana + peringatan tanggal, dan kalau apply, tulis ke sheet gabungan."""
+    """Jalur terminal/desktop: rencana, dan kalau apply, tulis ke sheet gabungan."""
     first, last_row, out, seen = plan_rows(svc, base, sid)
     print(f'\nSheet gabungan (tab {COMB_TAB}): {len(out)} baris Source {source} -> baris {first}-{first + len(out) - 1}'
           f' (baris terakhir sekarang {last_row})')
-    ov = overlap(seen, source, base)
-    if ov:
-        print(f'PERINGATAN: sheet gabungan sudah berisi {sum(ov.values())} baris Source {source} untuk {len(ov)} tanggal '
-              f'yang juga ada di file ini ({min(ov)} s/d {max(ov)}). Kalau dilanjut, datanya dobel.')
     if apply and out:
         write_rows(svc, out, first, sid)

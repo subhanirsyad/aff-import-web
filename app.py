@@ -187,10 +187,6 @@ def comb_summary(csid, ckey, base, source):
     if out:
         st.info(f'Sheet gabungan (tab **{ic.COMB_TAB}**): {n(len(out))} baris Source {source} akan ditambahkan di '
                 f'baris **{n(first)} - {n(first + len(out) - 1)}**.')
-    ov = ic.overlap(seen, source, base)
-    if ov:
-        st.warning(f'Sheet gabungan sudah berisi {n(sum(ov.values()))} baris Source {source} untuk {len(ov)} tanggal '
-                   f'yang juga ada di file ini ({min(ov)} s/d {max(ov)}). Kalau dilanjut, datanya dobel.')
 
 
 def comb_write(csid, base, email, name, key):
@@ -392,12 +388,7 @@ def flow_tap(sid, csid, name, data, email):
 
     last = first + len(out) - 1
     in_file = collections.Counter(r['Date'] for r in rows)
-    overlap = {d: dates[d] for d in in_file if dates.get(d)}
-    if overlap:
-        st.warning(f'Tab **{it.TARGET_TAB}** sudah berisi {n(sum(overlap.values()))} baris untuk '
-                   f'{len(overlap)} tanggal yang juga ada di file ini ({min(overlap)} s/d {max(overlap)}). '
-                   'Tidak ada cek duplikat, jadi kalau dilanjut datanya dobel.')
-    gmv = {k: sum(float(ia.num(r[c]) or 0) for r in rows) for k, c in
+    gmv ={k: sum(float(ia.num(r[c]) or 0) for r in rows) for k, c in
            (('All', it.GMV), ('SV', 'Affiliate video-attributed GMV'), ('LS', 'Creator LIVE-attributed GMV'))}
     by_brand = collections.defaultdict(lambda: [0, 0.0])
     for r in rows:

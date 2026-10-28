@@ -253,10 +253,6 @@ def main(argv=None):
     print(f'Tanggal: {", ".join(f"{d} ({n})" for d, n in sorted(in_file.items()))}')
     print(f'All GMV: {gmv:,.0f}'.replace(',', '.'))
     print('Per brand:', dict(by_brand))
-    overlap = {d: dates[d] for d in in_file if dates.get(d)}
-    if overlap:
-        print(f'PERINGATAN: tab {TARGET_TAB} sudah berisi {sum(overlap.values())} baris untuk {len(overlap)} tanggal yang '
-              f'juga ada di file ini ({min(overlap)} s/d {max(overlap)}). Kalau dilanjut, datanya dobel.')
     print(f'ID baru untuk List Produk: {len(new_ids)}')
     for p, name, brand, sub in new_ids:
         print(f'  {p} | {name[:60]} | {brand} | {sub}')
